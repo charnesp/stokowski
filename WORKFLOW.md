@@ -125,7 +125,7 @@ Before starting any implementation work:
 ## Execution flow
 
 1. Move issue to `In Progress` if in `Todo`.
-2. Post a `## Stokowski — Planning [ISO timestamp]` comment on the Linear issue and use it as your scratchpad during this run. You may update this comment freely within the same run.
+2. Post a `## Stokowski — Planning [ISO 8601 datetime, e.g. 2026-03-08T14:30:00Z]` comment on the Linear issue and use it as your scratchpad during this run. You may update this comment freely within the same run.
 3. Plan the implementation in the planning comment.
 4. Create a feature branch from `main`.
 5. Implement the changes with clean, logical commits.
@@ -133,7 +133,7 @@ Before starting any implementation work:
 7. Update documentation: append to `docs/build-log.md` (what was built), append ADR to `docs/decisions.md` if non-obvious choices were made, run `/update-docs` for other affected docs.
 8. Push the branch and create a PR.
 9. Link the PR to the Linear issue.
-10. Post a NEW `## Stokowski — Completed [ISO timestamp]` comment on the Linear issue. This comment should mirror the PR description: what was built, what was tested, any trade-offs or decisions. Do NOT edit the planning comment — this is a separate new comment.
+10. Post a NEW `## Stokowski — Completed [ISO 8601 datetime, e.g. 2026-03-08T14:30:00Z]` comment on the Linear issue. This comment should mirror the PR description: what was built, what was tested, any trade-offs or decisions. Do NOT edit the planning comment — this is a separate new comment.
 11. Move issue to `Human Review`.
 
 ## Quality bar before Human Review
