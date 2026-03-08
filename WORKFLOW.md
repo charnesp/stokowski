@@ -148,9 +148,37 @@ Additional requirements:
 - All acceptance criteria from the ticket description met.
 - If ticket contains a `criteria` JSON block, verify each criterion and report status.
 - PR created, linked to Linear issue, and branch is up to date with `main`.
-- Workpad comment updated with: what was done, what was tested, any known limitations.
+- Completion comment posted with: what was done, what was tested, any known limitations.
 - `docs/build-log.md` updated with a dated entry of what was built.
 - `docs/decisions.md` updated with ADRs for any non-obvious choices.
 - If UI changes were made: describe the visual changes in the PR description.
 
 Do NOT move to Human Review if any quality command fails. Fix the issues first.
+
+## Rework flow
+
+When the issue is in `Rework`, a reviewer or automated system has requested changes.
+
+1. Find the open PR for this issue's branch:
+   ```bash
+   gh pr list --head <branch-name> --json number,url
+   ```
+2. Read all PR comments added since `{{ last_run_at }}` (your last completed run). If `last_run_at` is empty, read all comments. This includes CI output, bot comments, automated checker results, and human reviewer comments:
+   ```bash
+   gh pr view <number> --comments --json comments
+   ```
+   Filter the returned JSON to comments where `createdAt > "{{ last_run_at }}"`. Address everything you find — do not assume a human will have written a Linear comment explaining what to fix.
+3. Read the Linear issue comment thread for historical context on what has already been addressed in previous rework rounds.
+4. Address all feedback found in the new PR comments.
+5. Run quality commands (same bar as initial work: typecheck, tests, lint).
+6. Push commits to the existing branch (do not create a new branch).
+7. Review the current PR description. If the rework changes what was built, update it:
+   ```bash
+   gh pr edit <number> --body "<updated description>"
+   ```
+8. Post a NEW `## Stokowski — Rework [ISO 8601 datetime, e.g. 2026-03-08T14:30:00Z]` comment on the Linear issue summarising:
+   - Which feedback was addressed
+   - What was modified
+   - Any decisions or trade-offs made
+9. Post the same summary as a new comment on the GitHub PR.
+10. Move issue back to `Human Review`.
