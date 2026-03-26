@@ -16,6 +16,12 @@ class RunnerFactory:
             raise ValueError(f"Unknown runner type: {runner_type}")
         
         runner_class = cls._runners[runner_type]
+        
+        # MuxRunner requires endpoint parameter
+        if runner_type == "mux":
+            endpoint = kwargs.get("mux_endpoint", "http://localhost:9988")
+            return runner_class(config, endpoint)
+        
         return runner_class(config)
     
     @classmethod
