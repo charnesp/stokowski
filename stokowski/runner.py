@@ -469,7 +469,7 @@ async def run_mux_turn(
     
     runner = RunnerFactory.create(
         "mux",
-        claude_cfg,
+        mux_cfg,
         mux_endpoint=mux_cfg.endpoint
     )
     

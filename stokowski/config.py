@@ -43,6 +43,7 @@ class MuxConfig:
     """Mux HTTP API runner configuration."""
     endpoint: str = "http://localhost:9988"
     api_key: str = ""
+    model: str = "claude-sonnet-4-6"  # Default model for Mux runner
 
 
 @dataclass
