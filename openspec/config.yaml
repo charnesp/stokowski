@@ -1,0 +1,49 @@
+# OpenSpec Configuration
+# https://github.com/Fission-AI/OpenSpec/
+
+schema: spec-driven
+
+project:
+  name: stokowski
+  description: Orchestrateur d'agents Claude Code pour Linear
+  tech_stack:
+    - python
+    - asyncio
+    - httpx
+    - Linear API
+    - git
+  conventions:
+    - python_style: pep8
+    - async_first: true
+    - type_hints: required
+
+artifacts:
+  proposal:
+    required_sections:
+      - problem
+      - approach
+      - acceptance_criteria
+    max_length: 2000
+  
+  specs:
+    required_sections:
+      - interface
+      - behavior
+      - error_handling
+    max_length: 3000
+  
+  design:
+    required_sections:
+      - architecture
+      - data_flow
+      - changes
+    max_length: 2500
+  
+  tasks:
+    format: markdown_checklist
+    max_tasks: 20
+
+rules:
+  - always_update_todo
+  - validate_before_complete
+  - evidence_before_claims
