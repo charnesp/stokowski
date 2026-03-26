@@ -27,3 +27,11 @@ def test_base_runner_is_abstract():
     
     with pytest.raises(TypeError):
         BaseRunner(config=None)  # Cannot instantiate abstract class
+
+
+def test_runner_error_hierarchy():
+    """Test that RunnerError subclasses are properly defined."""
+    from stokowski.runners.base import RunnerError, RunnerTimeout, RunnerConnectionError
+    
+    assert issubclass(RunnerTimeout, RunnerError)
+    assert issubclass(RunnerConnectionError, RunnerError)

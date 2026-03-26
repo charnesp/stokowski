@@ -14,6 +14,21 @@ class RunResult:
     total_tokens: int
 
 
+class RunnerError(Exception):
+    """Base exception for runner errors."""
+    pass
+
+
+class RunnerTimeout(RunnerError):
+    """Raised when a runner operation times out."""
+    pass
+
+
+class RunnerConnectionError(RunnerError):
+    """Raised when a runner cannot connect to its backend."""
+    pass
+
+
 class BaseRunner(ABC):
     """Abstract base class for all runners."""
     
