@@ -77,7 +77,10 @@ hooks:
 
 # ---------------------------------------------------------------------------
 # Claude defaults (inherited by all agent states unless overridden)
-# States using runner: codex will use the Codex CLI instead.
+# States can use different runners via runner: field:
+#   runner: claude (default) - Claude Code CLI
+#   runner: mux - Mux HTTP API
+#   runner: codex - Codex CLI
 # ---------------------------------------------------------------------------
 claude:
   permission_mode: auto
@@ -173,13 +176,14 @@ states:
   # ── 5. Code Review ─────────────────────────────────────────────────────
   # Automated adversarial review: fresh session, no prior context.
   # Opus reviews the diff and posts findings.
-  # Tip: set runner: codex here to get a second-opinion from a different
-  # provider — different states can use different runners in the same run.
+  # Tip: set runner: mux here to get a second-opinion from a different
+  # provider — different states can use different runners (claude, mux, codex)
+  # in the same workflow.
   code-review:
     type: agent
     prompt: prompts/review.example.md
     linear_state: active
-    runner: claude              # "claude" (default) or "codex"
+    runner: claude              # "claude" (default), "mux", or "codex"
     model: claude-opus-4-6
     max_turns: 10
     session: fresh              # no prior context — adversarial review
