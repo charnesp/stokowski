@@ -44,7 +44,11 @@ To use Mux as a runner, configure the `mux` section in `workflow.yaml`:
 mux:
   endpoint: http://localhost:9988  # Mux API server URL
   api_key: ""                      # Optional API key for authentication
-  model: claude-sonnet-4-6         # LLM model for Mux runner
+  model: ollama:kimi-k2.5:cloud    # Format: provider:model
+                                   # Examples:
+                                   #   anthropic:claude-sonnet-4-6
+                                   #   ollama:kimi-k2.5:cloud
+                                   #   openai:gpt-4
 ```
 
 Then configure states to use `runner: mux`:

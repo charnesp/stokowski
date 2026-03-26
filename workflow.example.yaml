@@ -90,6 +90,13 @@ claude:
   stall_timeout_ms: 300000        # 5 minutes with no output → kill
 
 # ---------------------------------------------------------------------------
+# Mux HTTP API configuration (for states using runner: mux)
+# ---------------------------------------------------------------------------
+mux:
+  endpoint: http://localhost:9988  # Mux API server URL
+  api_key: ""  # Optional API key
+  model: ollama:kimi-k2.5:cloud
+# ---------------------------------------------------------------------------
 # Agent concurrency
 # ---------------------------------------------------------------------------
 agent:
