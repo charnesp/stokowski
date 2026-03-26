@@ -36,6 +36,27 @@ states:
     runner: mux  # or "claude"
 ```
 
+### Mux Configuration
+To use Mux as a runner, configure the `mux` section in `workflow.yaml`:
+
+```yaml
+# Mux HTTP API configuration
+mux:
+  endpoint: http://localhost:9988  # Mux API server URL
+  api_key: ""                      # Optional API key for authentication
+```
+
+Then configure states to use `runner: mux`:
+```yaml
+states:
+  code-review:
+    type: agent
+    runner: mux
+    prompt: prompts/review.md
+```
+
+**Note:** The `workflow.yaml` file is gitignored (operator-local config). Copy from `workflow.example.yaml` and customize.
+
 ### Key Files
 - `stokowski/runners/base.py` - BaseRunner abstract class
 - `stokowski/runners/claude_runner.py` - Claude CLI implementation

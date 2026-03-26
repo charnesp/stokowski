@@ -751,6 +751,7 @@ class Orchestrator:
                 attempt = await run_turn(
                     runner_type=runner_type,
                     claude_cfg=claude_cfg,
+                    mux_cfg=self.cfg.mux,
                     hooks_cfg=hooks_cfg,
                     prompt=prompt,
                     workspace_path=ws.path,
@@ -792,6 +793,7 @@ class Orchestrator:
                     attempt = await run_turn(
                         runner_type=runner_type,
                         claude_cfg=claude_cfg,
+                        mux_cfg=self.cfg.mux,
                         hooks_cfg=hooks_cfg,
                         prompt=prompt,
                         workspace_path=ws.path,

@@ -39,6 +39,13 @@ class WorkspaceConfig:
 
 
 @dataclass
+class MuxConfig:
+    """Mux HTTP API runner configuration."""
+    endpoint: str = "http://localhost:9988"
+    api_key: str = ""
+
+
+@dataclass
 class HooksConfig:
     after_create: str | None = None
     before_run: str | None = None
@@ -125,6 +132,7 @@ class ServiceConfig:
     workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
     hooks: HooksConfig = field(default_factory=HooksConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
+    mux: MuxConfig = field(default_factory=MuxConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     linear_states: LinearStatesConfig = field(default_factory=LinearStatesConfig)

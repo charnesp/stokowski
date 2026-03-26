@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from .config import ClaudeConfig, HooksConfig
+from .config import ClaudeConfig, HooksConfig, MuxConfig
 from .models import Issue, RunAttempt
 
 logger = logging.getLogger("stokowski.runner")
@@ -455,6 +455,7 @@ def _process_event(
 
 async def run_mux_turn(
     claude_cfg: ClaudeConfig,
+    mux_cfg: MuxConfig,
     hooks_cfg: HooksConfig,
     prompt: str,
     workspace_path: Path,
@@ -469,7 +470,7 @@ async def run_mux_turn(
     runner = RunnerFactory.create(
         "mux",
         claude_cfg,
-        mux_endpoint=env.get("MUX_ENDPOINT", "http://localhost:9988") if env else "http://localhost:9988"
+        mux_endpoint=mux_cfg.endpoint
     )
     
     logger.info(
@@ -535,6 +536,7 @@ async def run_mux_turn(
 async def run_turn(
     runner_type: str,
     claude_cfg: ClaudeConfig,
+    mux_cfg: MuxConfig,
     hooks_cfg: HooksConfig,
     prompt: str,
     workspace_path: Path,
@@ -573,6 +575,7 @@ async def run_turn(
     elif runner_type == "mux":
         return await run_mux_turn(
             claude_cfg=claude_cfg,
+            mux_cfg=mux_cfg,
             hooks_cfg=hooks_cfg,
             prompt=prompt,
             workspace_path=workspace_path,
