@@ -453,6 +453,85 @@ def _process_event(
         on_event(identifier, event_type, event)
 
 
+async def run_mux_turn(
+    claude_cfg: ClaudeConfig,
+    hooks_cfg: HooksConfig,
+    prompt: str,
+    workspace_path: Path,
+    issue: Issue,
+    attempt: RunAttempt,
+    on_event: EventCallback | None = None,
+    env: dict[str, str] | None = None,
+) -> RunAttempt:
+    """Run a single Mux turn. Returns updated RunAttempt."""
+    from .runners import RunnerFactory
+    
+    runner = RunnerFactory.create(
+        "mux",
+        claude_cfg,
+        mux_endpoint=env.get("MUX_ENDPOINT", "http://localhost:9988") if env else "http://localhost:9988"
+    )
+    
+    logger.info(
+        f"Launching mux issue={issue.identifier} "
+        f"session={attempt.session_id or 'new'} "
+        f"turn={attempt.turn_count + 1}"
+    )
+    
+    # Run before_run hook
+    if hooks_cfg.before_run:
+        from .workspace import run_hook
+        
+        ok = await run_hook(
+            hooks_cfg.before_run, workspace_path, hooks_cfg.timeout_ms, "before_run"
+        )
+        if not ok:
+            attempt.status = "failed"
+            attempt.error = "before_run hook failed"
+            return attempt
+    
+    attempt.status = "streaming"
+    attempt.started_at = attempt.started_at or datetime.now(timezone.utc)
+    attempt.turn_count += 1
+    attempt.last_event_at = datetime.now(timezone.utc)
+    
+    try:
+        result = await runner.run_turn(
+            prompt=prompt,
+            session_id=attempt.session_id,
+            on_output=lambda line: logger.debug(f"Mux output: {line[:100]}...")
+        )
+        
+        # Update attempt from result
+        attempt.session_id = result.session_id
+        attempt.input_tokens = result.input_tokens
+        attempt.output_tokens = result.output_tokens
+        attempt.total_tokens = result.total_tokens
+        attempt.last_message = result.result[:200] if result.result else ""
+        attempt.status = "succeeded"
+        
+    except Exception as e:
+        logger.error(f"Mux runner error issue={issue.identifier}: {e}")
+        attempt.status = "failed"
+        attempt.error = str(e)
+    
+    # Run after_run hook
+    if hooks_cfg.after_run:
+        from .workspace import run_hook
+        
+        await run_hook(
+            hooks_cfg.after_run, workspace_path, hooks_cfg.timeout_ms, "after_run"
+        )
+    
+    logger.info(
+        f"Mux turn complete issue={issue.identifier} "
+        f"status={attempt.status} "
+        f"tokens={attempt.total_tokens}"
+    )
+    
+    return attempt
+
+
 async def run_turn(
     runner_type: str,
     claude_cfg: ClaudeConfig,
@@ -489,6 +568,17 @@ async def run_turn(
             attempt=attempt,
             on_event=on_event,
             on_pid=on_pid,
+            env=env,
+        )
+    elif runner_type == "mux":
+        return await run_mux_turn(
+            claude_cfg=claude_cfg,
+            hooks_cfg=hooks_cfg,
+            prompt=prompt,
+            workspace_path=workspace_path,
+            issue=issue,
+            attempt=attempt,
+            on_event=on_event,
             env=env,
         )
     else:
