@@ -4,7 +4,7 @@
 
 ### Task 1: Test BaseRunner Interface
 
-- [ ] **Step 1.1: Write test for RunResult dataclass**
+- [x] **Step 1.1: Write test for RunResult dataclass**
   ```python
   # tests/runners/test_base.py
   def test_run_result_creation():
@@ -14,7 +14,7 @@
   ```
   Expected: Test fails (RunResult doesn't exist yet)
 
-- [ ] **Step 1.2: Write test for BaseRunner interface**
+- [x] **Step 1.2: Write test for BaseRunner interface**
   ```python
   def test_base_runner_is_abstract():
       with pytest.raises(TypeError):
@@ -22,7 +22,7 @@
   ```
   Expected: Test fails (BaseRunner doesn't exist yet)
 
-- [ ] **Step 1.3: Write test for RunnerError hierarchy**
+- [x] **Step 1.3: Write test for RunnerError hierarchy**
   ```python
   def test_runner_error_subclasses():
       assert issubclass(RunnerTimeout, RunnerError)
@@ -32,7 +32,7 @@
 
 ### Task 2: Test RunnerFactory
 
-- [ ] **Step 2.1: Write test for creating ClaudeRunner**
+- [x] **Step 2.1: Write test for creating ClaudeRunner**
   ```python
   # tests/runners/test_factory.py
   def test_factory_creates_claude_runner():
@@ -41,7 +41,7 @@
   ```
   Expected: Test fails (Factory doesn't exist yet)
 
-- [ ] **Step 2.2: Write test for creating MuxRunner**
+- [x] **Step 2.2: Write test for creating MuxRunner**
   ```python
   def test_factory_creates_mux_runner():
       runner = RunnerFactory.create("mux", mock_config, mux_endpoint="http://test:9988")
@@ -50,7 +50,7 @@
   ```
   Expected: Test fails (Factory doesn't exist yet)
 
-- [ ] **Step 2.3: Write test for unknown runner rejection**
+- [x] **Step 2.3: Write test for unknown runner rejection**
   ```python
   def test_factory_rejects_unknown_runner():
       with pytest.raises(ConfigError):
