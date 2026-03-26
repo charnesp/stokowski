@@ -16,3 +16,17 @@ class ClaudeRunner(BaseRunner):
     
     def get_name(self):
         return "claude"
+    
+    def _build_command(self, prompt, session_id=None):
+        """Build the CLI command for Claude Code."""
+        cmd = [
+            self.config.get("command", "claude"),
+            "-p", prompt,
+            "--output-format", "stream-json",
+            "--verbose"
+        ]
+        
+        if session_id:
+            cmd.extend(["--resume", session_id])
+        
+        return cmd

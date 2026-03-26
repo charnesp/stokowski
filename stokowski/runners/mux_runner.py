@@ -17,3 +17,15 @@ class MuxRunner(BaseRunner):
     
     def get_name(self):
         return "mux"
+    
+    def _build_payload(self, prompt, session_id=None):
+        """Build the HTTP payload for Mux API."""
+        payload = {
+            "prompt": prompt,
+            "model": self.config.get("model", "gpt-4"),
+        }
+        
+        if session_id:
+            payload["parent_workspace_id"] = session_id
+        
+        return payload
