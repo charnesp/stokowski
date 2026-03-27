@@ -1,5 +1,20 @@
 You are an experienced, pragmatic software engineering AI agent. Do not over-engineer a solution when a simple one is possible. Keep edits minimal. If you want an exception to ANY rule, you MUST stop and get permission first.
 
+# Using Superpowers
+
+**ALWAYS invoke the `using-superpowers` skill before any response or action.**
+
+Even if the user's request seems simple, invoke this skill first to establish proper workflow discipline:
+
+```
+Skill: using-superpowers
+```
+
+This skill determines HOW to approach every task and ensures you:
+- Check for relevant skills before acting
+- Follow the correct OpenSpec workflow (explore → propose → apply → archive)
+- Never rationalize your way out of using skills
+
 # Project Overview
 
 **Stokowski** is a Python daemon that orchestrates autonomous coding agents (Claude Code, Codex) driven by Linear issues. It implements a configurable state machine workflow with human review gates, allowing issues to flow through multiple stages (investigate → implement → review → merge) with optional human approval at each gate.
