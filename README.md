@@ -561,6 +561,7 @@ agent:
 
 prompts:
   global_prompt: prompts/global.md     # loaded for every agent turn (optional)
+  lifecycle_prompt: prompts/lifecycle.md  # required. Template for lifecycle injection
 
 states:                                # the state machine pipeline
   investigate:
@@ -674,6 +675,20 @@ All three layers receive the same template variables:
 | `{{ last_run_at }}` | ISO 8601 timestamp of the last completed agent run for this issue (empty string on first run) |
 
 The lifecycle section is appended automatically — you don't need to include it in your prompt files. It provides the agent with available transitions, rework feedback, and recent Linear comments.
+
+**Custom lifecycle templates** (`prompts.lifecycle_prompt`) receive additional lifecycle-specific variables:
+
+| Variable | Description |
+|----------|-------------|
+| `{{ previous_error }}` | Error message from previous failed attempt (empty if none) |
+| `{{ is_rework }}` | `true` if this is a rework run after gate rejection |
+| `{{ recent_comments }}` | List of recent non-tracking Linear comments since last run |
+| `{{ transitions }}` | Dictionary mapping trigger names to target state names |
+| `{{ has_gate_transition }}` | `true` if any transition leads to a gate state |
+| `{{ gate_targets }}` | List of `(trigger, target)` tuples for gate transitions |
+| `{{ issue }}` | The full Issue object with all attributes |
+
+Use these to customize the lifecycle injection section that appears at the end of every agent prompt. See `prompts/lifecycle.md` for an example template.
 
 ---
 

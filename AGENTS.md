@@ -180,19 +180,75 @@ Patch `server.install_signal_handlers = lambda: None` before calling `serve()`, 
 
 # Test-Driven Development (TDD)
 
-This project follows **strict TDD** for all code changes.
+This project follows **strict TDD** for all code changes. **NO EXCEPTIONS**.
 
-**Rule:** No production code without a failing test first.
+## The Golden Rule
+
+**NEVER write production code without a failing test first.**
+
+If you write code before the test:
+1. **STOP immediately**
+2. **DELETE the code you wrote**
+3. **Write the test first**
+4. **Start over**
+
+This applies to:
+- New features
+- Bug fixes
+- Refactoring
+- "Quick" changes
+- "Just documentation" (test the examples)
+- Emergency fixes (still need a test that reproduces the bug)
+
+## RED → GREEN → REFACTOR
+
+1. **RED**: Write a failing test that describes the desired behavior
+   - Watch it fail for the right reason
+   - If it passes, your test is wrong
+
+2. **GREEN**: Write minimal code to make the test pass
+   - No elegance, no optimization, just make it green
+   - Copy-paste is OK, dirty code is OK
+
+3. **REFACTOR**: Clean up while keeping tests green
+   - Now you can make it pretty
+   - Now you can optimize
+   - Tests give you safety
+
+## The "I Already Wrote The Code" Problem
+
+**You wrote code before the test?**
+
+→ **DELETE IT.** All of it. No exceptions. No "I'll just keep this one part."
+
+**But it's just a small change...**
+
+→ **DELETE IT.** Write the test first.
+
+**But I understand the problem better now...**
+
+→ **DELETE IT.** Understanding doesn't replace the red-green-refactor discipline.
+
+**But we're in a hurry...**
+
+→ **DELETE IT.** TDD is faster in the long run. The "quick" way is the slow way.
+
+## Test Coverage Requirements
+
+Every code change must have:
+1. **Unit tests** for the new behavior
+2. **Integration tests** if it crosses component boundaries
+3. **Error case tests** for failure modes
+
+**Coverage is not optional.** No "I'll add tests later." Later never comes.
+
+## When in Doubt: Test First
+
+If you're unsure whether a change needs TDD:
+
+→ **IT NEEDS TDD. STOP. WRITE THE TEST.**
 
 Use the `test-driven-development` skill for complete methodology.
-
-**Summary:** RED → GREEN → REFACTOR
-1. Write a failing test first
-2. Watch it fail for the right reason
-3. Write minimal code to pass
-4. Refactor while staying green
-
-**The Iron Law:** Write code before the test? Delete it. Start over.
 
 # OpenSpec Methodology
 

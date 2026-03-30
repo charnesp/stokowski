@@ -87,8 +87,17 @@ class LinearStatesConfig:
 
 @dataclass
 class PromptsConfig:
-    """Prompt file references."""
+    """Prompt file references.
+
+    Attributes:
+        global_prompt: Path to the global prompt .md file (optional).
+        lifecycle_prompt: Path to the lifecycle injection template .md file (required).
+            This Jinja2 template is rendered for every agent turn to provide
+            lifecycle context (report requirements, rework info, transitions).
+            Defaults to "prompts/lifecycle.md".
+    """
     global_prompt: str | None = None
+    lifecycle_prompt: str = "prompts/lifecycle.md"
 
 
 @dataclass
@@ -381,8 +390,10 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
 
     # Parse prompts
     pr_raw = config_raw.get("prompts", {}) or {}
+    lifecycle_prompt = pr_raw.get("lifecycle_prompt", "prompts/lifecycle.md")
     prompts = PromptsConfig(
         global_prompt=pr_raw.get("global_prompt"),
+        lifecycle_prompt=lifecycle_prompt,
     )
 
     # Parse states
