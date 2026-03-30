@@ -1,6 +1,11 @@
 {
   "version": 1,
   "skills": {
+    "deep-review": {
+      "source": "coder/mux",
+      "sourceType": "github",
+      "computedHash": "6795f6929c658add14473726cb9173b84975b078be5c076988d5172926548749"
+    },
     "dispatching-parallel-agents": {
       "source": "obra/superpowers",
       "sourceType": "github",
