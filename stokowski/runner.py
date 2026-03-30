@@ -67,6 +67,44 @@ def validate_agent_output(output_text: str | None) -> tuple[bool, str | None]:
     return True, None
 
 
+def _finalize_attempt(
+    attempt: RunAttempt,
+    returncode: int,
+    stderr_output: str,
+    issue_identifier: str,
+) -> None:
+    """Finalize attempt status based on exit code and report validation.
+
+    This helper encapsulates the common finalization logic for all agent runners.
+    It checks the process exit code, validates the report if successful,
+    and sets the appropriate status and error message.
+
+    Args:
+        attempt: The RunAttempt to finalize (mutated in place).
+        returncode: The process exit code.
+        stderr_output: Captured stderr output (for error messages).
+        issue_identifier: The issue identifier (for logging).
+    """
+    if attempt.status != "streaming":
+        # Already set by stall/timeout handler
+        return
+
+    if returncode == 0:
+        # Validate the agent output contains required report
+        is_valid, error_msg = validate_agent_output(attempt.full_output)
+        if is_valid:
+            attempt.status = "succeeded"
+        else:
+            attempt.status = "failed"
+            attempt.error = f"Report validation failed: {error_msg}"
+            logger.warning(
+                f"Report validation failed for {issue_identifier}: {error_msg}"
+            )
+    else:
+        attempt.status = "failed"
+        attempt.error = f"Exit code {returncode}: {stderr_output}"
+
+
 def build_claude_args(
     claude_cfg: ClaudeConfig,
     workspace_path: Path,
@@ -270,29 +308,15 @@ async def run_codex_turn(
     # Store full output for validation and reporting
     attempt.full_output = "\n".join(output_lines)
 
-    # Determine final status from exit code if not already set
-    if attempt.status == "streaming":
-        stderr_output = ""
-        if proc.stderr:
-            try:
-                stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
-                stderr_output = stderr_bytes.decode()[:500]
-            except (asyncio.TimeoutError, Exception):
-                pass
-        if proc.returncode == 0:
-            # Validate the agent output contains required report
-            is_valid, error_msg = validate_agent_output(attempt.full_output)
-            if is_valid:
-                attempt.status = "succeeded"
-            else:
-                attempt.status = "failed"
-                attempt.error = f"Report validation failed: {error_msg}"
-                logger.warning(
-                    f"Report validation failed for {issue.identifier}: {error_msg}"
-                )
-        else:
-            attempt.status = "failed"
-            attempt.error = f"Codex exit code {proc.returncode}: {stderr_output}"
+    # Determine final status from exit code and validate report
+    stderr_output = ""
+    if proc.stderr:
+        try:
+            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
+            stderr_output = stderr_bytes.decode()[:500]
+        except (asyncio.TimeoutError, Exception):
+            pass
+    _finalize_attempt(attempt, proc.returncode, stderr_output, issue.identifier)
 
     # Run after_run hook
     if hooks_cfg.after_run:
@@ -458,29 +482,15 @@ async def run_agent_turn(
         attempt.error = str(e)
         return attempt
 
-    # Determine final status from exit code if not already set by stall/timeout
-    if attempt.status == "streaming":
-        if proc.returncode == 0:
-            # Validate the agent output contains required report
-            is_valid, error_msg = validate_agent_output(attempt.full_output)
-            if is_valid:
-                attempt.status = "succeeded"
-            else:
-                attempt.status = "failed"
-                attempt.error = f"Report validation failed: {error_msg}"
-                logger.warning(
-                    f"Report validation failed for {issue.identifier}: {error_msg}"
-                )
-        else:
-            stderr_output = ""
-            if proc.stderr:
-                try:
-                    stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
-                    stderr_output = stderr_bytes.decode()[:500]
-                except (asyncio.TimeoutError, Exception):
-                    pass
-            attempt.status = "failed"
-            attempt.error = f"Exit code {proc.returncode}: {stderr_output}"
+    # Determine final status from exit code and validate report
+    stderr_output = ""
+    if proc.stderr:
+        try:
+            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
+            stderr_output = stderr_bytes.decode()[:500]
+        except (asyncio.TimeoutError, Exception):
+            pass
+    _finalize_attempt(attempt, proc.returncode, stderr_output, issue.identifier)
 
     # Run after_run hook
     if hooks_cfg.after_run:
@@ -793,30 +803,15 @@ async def run_mux_turn(
         attempt.status = "failed"
         attempt.error = str(e)
 
-    # Determine final status from exit code
-    if attempt.status == "streaming":
-        stderr_output = ""
-        if proc.stderr:
-            try:
-                stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
-                stderr_output = stderr_bytes.decode()[:500]
-            except (asyncio.TimeoutError, Exception):
-                pass
-
-        if proc.returncode == 0:
-            # Validate the agent output contains required report
-            is_valid, error_msg = validate_agent_output(attempt.full_output)
-            if is_valid:
-                attempt.status = "succeeded"
-            else:
-                attempt.status = "failed"
-                attempt.error = f"Report validation failed: {error_msg}"
-                logger.warning(
-                    f"Report validation failed for {issue.identifier}: {error_msg}"
-                )
-        else:
-            attempt.status = "failed"
-            attempt.error = f"Mux exit code {proc.returncode}: {stderr_output}"
+    # Determine final status from exit code and validate report
+    stderr_output = ""
+    if proc.stderr:
+        try:
+            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
+            stderr_output = stderr_bytes.decode()[:500]
+        except (asyncio.TimeoutError, Exception):
+            pass
+    _finalize_attempt(attempt, proc.returncode, stderr_output, issue.identifier)
 
     # Run after_run hook
     if hooks_cfg.after_run:
