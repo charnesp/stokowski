@@ -270,6 +270,25 @@ There are no automated tests beyond `--dry-run`. The system is best verified by 
 
 ---
 
+## Git Workflow
+
+**NEVER push directly to `main`.** All changes must go through a branch and pull request.
+
+### Branch Naming
+- Use descriptive branch names: `feature/description`, `fix/description`, `refactor/description`
+- Example: `feature/add-mux-runner`, `fix/report-validation`
+
+### Workflow
+1. Create a branch from `main`: `git checkout -b feature/my-change`
+2. Make commits with clear messages
+3. Push the branch: `git push -u origin feature/my-change`
+4. Open a Pull Request for review
+5. Merge via PR after approval
+
+This ensures code review and prevents accidental breaking changes to production.
+
+---
+
 ## Contributing
 
 ### Adding a new tracker (not Linear)
