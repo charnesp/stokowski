@@ -336,13 +336,10 @@ Not set up? [GitHub SSH key guide →](https://docs.github.com/en/authentication
 ### 2. Install Stokowski
 
 ```bash
-git clone https://github.com/Sugar-Coffee/stokowski
+git clone https://github.com/charnesp/stokowski
 cd stokowski
 
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-
-pip install -e ".[web]"     # installs core + web dashboard
+uv sync                      # creates .venv, installs dependencies
 
 stokowski --help             # verify it's working
 ```
@@ -449,7 +446,6 @@ hooks:
 ### 6. Validate
 
 ```bash
-source .venv/bin/activate   # if not already active
 stokowski --dry-run
 ```
 
@@ -860,8 +856,7 @@ git fetch --tags
 git checkout $(git describe --tags `git rev-list --tags --max-count=1`)
 
 # Re-install to pick up any new dependencies
-source .venv/bin/activate
-pip install -e ".[web]"
+uv sync
 
 # Verify everything still works
 stokowski --dry-run
@@ -869,10 +864,19 @@ stokowski --dry-run
 
 > **Note:** `git pull origin main` will work but may include unreleased commits ahead of the latest tag — treat that as nightly if you go that route.
 
-**If you installed via pip** *(PyPI coming soon):*
+**If you installed via pip or uv:**
 
 ```bash
-pip install --upgrade git+https://github.com/Sugar-Coffee/stokowski.git#egg=stokowski[web]
+# With pip (from git)
+pip install git+https://github.com/charnesp/stokowski.git#egg=stokowski[web]
+
+# With uv tool install (no virtual environment needed)
+uv tool install git+https://github.com/charnesp/stokowski.git#egg=stokowski
+
+# Local editable install: clone first, then
+git clone https://github.com/charnesp/stokowski.git
+cd stokowski
+uv sync
 ```
 
 **After upgrading, check if `workflow.example.yaml` has changed** — new config fields may have been added that you'll want to adopt:
