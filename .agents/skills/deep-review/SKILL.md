@@ -49,7 +49,7 @@ Spawn **2–5** sub-agents depending on scope. Tailor them to the change.
 When sub-agent results arrive, produce a consolidated review with:
 
 1. **Summary** (what changed + overall risk)
-2. **Issues** 
+2. **Issues**
 3. **Questions** (unknown intent; ask for clarification)
 4. **Suggested validation plan** (commands + manual checks)
 

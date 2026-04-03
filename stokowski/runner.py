@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -652,28 +653,31 @@ async def run_mux_turn(
 
         # Debug: optionally save raw NDJSON to file (controlled by env var)
         debug_ndjson = os.environ.get("STOKOWSKI_DEBUG_NDJSON", "")
-        debug_file = None
-        if debug_ndjson:
-            debug_ndjson_path = f"/tmp/stokowski_ndjson_{issue.identifier.replace('-', '_')}.json"  # nosec B108
-            debug_file = open(debug_ndjson_path, "w")
-            logger.info(f"Saving raw NDJSON to {debug_ndjson_path}")
+        with ExitStack() as stack:
+            debug_file = None
+            if debug_ndjson:
+                debug_ndjson_path = (
+                    f"/tmp/stokowski_ndjson_{issue.identifier.replace('-', '_')}.json"  # nosec B108
+                )
+                debug_file = stack.enter_context(open(debug_ndjson_path, "w"))
+                logger.info(f"Saving raw NDJSON to {debug_ndjson_path}")
 
-        while proc.stdout:
-            line = await proc.stdout.readline()
-            if not line:
-                break
-            last_activity = loop.time()
-            attempt.last_event_at = datetime.now(UTC)
+            while proc.stdout:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                last_activity = loop.time()
+                attempt.last_event_at = datetime.now(UTC)
 
-            line_str = line.decode().strip()
-            if not line_str:
-                continue
+                line_str = line.decode().strip()
+                if not line_str:
+                    continue
 
-            raw_output_lines.append(line_str)
-            if debug_file:
-                debug_file.write(line_str + "\n")
-                debug_file.flush()
-            attempt.last_message = line_str[:200]
+                raw_output_lines.append(line_str)
+                if debug_file:
+                    debug_file.write(line_str + "\n")
+                    debug_file.flush()
+                attempt.last_message = line_str[:200]
 
             # Parse as JSON and extract assistant messages
             try:
@@ -751,15 +755,15 @@ async def run_mux_turn(
                     assistant_messages.append(line_str)
                     logger.debug(f"Mux: Non-JSON text ({len(line_str)} chars)")
 
-        # Store raw NDJSON for debugging, but also reconstructed readable output
-        if debug_file:
-            debug_file.close()
-        readable_output = "\n".join(assistant_messages)
-        attempt.full_output = readable_output
+            # Store raw NDJSON for debugging, but also reconstructed readable output
+            readable_output = "\n".join(assistant_messages)
+            attempt.full_output = readable_output
+
         logger.info(
             f"MUX OUTPUT for {issue.identifier}:\n{'=' * 60}\n{readable_output}\n{'=' * 60}"
         )
-        logger.info(f"Raw NDJSON saved to {debug_ndjson_path} ({len(raw_output_lines)} lines)")
+        if debug_ndjson:
+            logger.info(f"Raw NDJSON saved to {debug_ndjson_path} ({len(raw_output_lines)} lines)")
         return raw_output_lines
 
     async def stall_monitor():

@@ -424,7 +424,6 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
         # Try parsing as pure YAML
         config_raw = yaml.safe_load(content) or {}
 
-
     prompt_template = prompt_body.strip()
 
     # Parse tracker
@@ -521,7 +520,9 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
             wf_prompts_raw: dict[str, Any] = wf_data.get("prompts", {}) or {}  # type: ignore[assignment]
             wf_prompts = PromptsConfig(
                 global_prompt=wf_prompts_raw.get("global_prompt"),
-                lifecycle_prompt=str(wf_prompts_raw.get("lifecycle_prompt", "prompts/lifecycle.md")),
+                lifecycle_prompt=str(
+                    wf_prompts_raw.get("lifecycle_prompt", "prompts/lifecycle.md")
+                ),
             )
 
             workflows[wf_name] = WorkflowConfig(

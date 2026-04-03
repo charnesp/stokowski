@@ -359,9 +359,7 @@ class Orchestrator:
 
         # Move to terminal state
         terminal_state = (
-            self.cfg.terminal_linear_states()[0]
-            if self.cfg.terminal_linear_states()
-            else "Done"
+            self.cfg.terminal_linear_states()[0] if self.cfg.terminal_linear_states() else "Done"
         )
         try:
             moved = await client.update_issue_state(issue.id, terminal_state)
