@@ -56,9 +56,9 @@ The following items need explicit approval before proceeding:
 {% endif %}
 ## Lifecycle Context
 
-- **Issue:** {{ issue.identifier }} — {{ issue.title }}
-{% if issue.url %}
-- **URL:** {{ issue.url }}
+- **Issue:** {{ issue_identifier }} — {{ issue_title }}
+{% if issue_url %}
+- **URL:** {{ issue_url }}
 {% endif %}
 - **State:** {{ state_name }}
 - **Run:** {{ run }}
