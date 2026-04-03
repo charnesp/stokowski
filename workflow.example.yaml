@@ -1,13 +1,17 @@
 # =============================================================================
-# Stokowski — Example State Machine Workflow
+# Stokowski — Example Multi-Workflow Configuration
 # =============================================================================
 #
 # Copy this file to workflow.yaml and customise for your project.
 # Stokowski re-reads this file on every poll tick — changes take effect
 # without restart.
 #
-# Prompt files live in the prompts/ directory.  Each agent state references
-# its prompt via the `prompt` field.  A global prompt (shared preamble) is
+# Multi-workflow: issues are routed based on their Linear labels.
+# First matching workflow wins. One workflow can be marked 'default: true'
+# as fallback for issues without matching labels.
+#
+# Prompt files live in the prompts/ directory. Each agent state references
+# its prompt via the `prompt` field. A global prompt (shared preamble) is
 # injected before the stage-specific prompt when set.
 #
 # Linear states mapping:
@@ -23,17 +27,17 @@
 #   terminal — issue is finished; workspace cleaned up
 # =============================================================================
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Tracker
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 tracker:
   kind: linear
   project_slug: "abc123def456"    # hex slugId from your Linear project URL
 
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Linear state name mapping
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # These map Stokowski's internal lifecycle roles to your Linear state names.
 # You can rename values to match your Linear setup (e.g. todo: "Ready"),
 # but all six roles are required — removing or reordering them will break
@@ -51,21 +55,21 @@ linear_states:
     - Canceled
     - Duplicate
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Polling
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 polling:
   interval_ms: 15000              # 15 seconds between ticks
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Workspace
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 workspace:
   root: ~/code/stokowski-workspaces
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Hooks — shell scripts run in the workspace directory
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 hooks:
   after_create: |
     git clone --depth 1 git@github.com:your-org/your-repo.git .
@@ -75,13 +79,13 @@ hooks:
     git rebase origin/main 2>/dev/null || git rebase --abort
   timeout_ms: 120000
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Claude defaults (inherited by all agent states unless overridden)
 # States using runner: codex will use the Codex CLI instead.
 # States using runner: mux will use the Mux CLI instead.
 # Note: Mux uses the same configuration options as Claude (permission_mode, model,
 # max_turns, timeouts, etc.) since it's a Claude Code compatible runner.
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 claude:
   permission_mode: auto
   model: claude-sonnet-4-6
@@ -89,130 +93,220 @@ claude:
   turn_timeout_ms: 3600000        # 1 hour per turn
   stall_timeout_ms: 300000        # 5 minutes with no output → kill
 
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Agent concurrency
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 agent:
   max_concurrent_agents: 4
   max_retry_backoff_ms: 300000    # 5-minute cap on exponential backoff
-  max_concurrent_agents_by_state:
-    investigate: 2                # allow 2 concurrent investigations
-    implement: 2
-    code-review: 1                # serial reviews prevent merge conflicts
 
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-prompts:
-  global_prompt: prompts/global.example.md
-  lifecycle_prompt: prompts/lifecycle.md  # Required. Template for lifecycle injection.
-
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Server (optional web dashboard)
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 server:
   port: 4200
 
-# ---------------------------------------------------------------------------
-# State machine
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Workflows — issues are routed based on Linear labels
+# -----------------------------------------------------------------------------
 #
-# Order matters: the first agent state is the entry state for new issues.
+# Each workflow defines:
+#   - label: the Linear label that triggers this workflow (exact match)
+#   - default: (optional) if true, this workflow is the fallback for issues
+#             without matching labels. Only one workflow can be default.
+#   - states: the state machine for this workflow
+#   - prompts: global_prompt and lifecycle_prompt for this workflow
 #
-# Transitions fire automatically on agent success or human action:
-#   - Agent finishes successfully  → "complete" transition
-#   - Human approves a gate        → "approve" transition
-#   - Human requests rework        → rework_to target
+# First matching workflow wins (YAML order matters).
+# If no workflow matches and no default exists, dispatch fails.
 #
-states:
+# Backwards compatibility: if 'workflows:' is absent, Stokowski creates an
+# implicit default workflow from root 'states:' and 'prompts:' sections.
+# -----------------------------------------------------------------------------
 
-  # ── 1. Investigate ──────────────────────────────────────────────────────
-  # Read the codebase, understand the problem, post an investigation summary.
-  # Uses Opus for deeper reasoning.  Low turn count — investigation only.
-  investigate:
-    type: agent
-    prompt: prompts/investigate.example.md
-    linear_state: active
-    model: claude-opus-4-6
-    max_turns: 8
-    session: inherit
-    transitions:
-      complete: research-review
+workflows:
 
-  # ── 2. Research Review (gate) ───────────────────────────────────────────
-  # Human reviews the investigation before implementation starts.
-  # Rework loops back to investigate.
-  research-review:
-    type: gate
-    linear_state: review
-    rework_to: investigate
-    max_rework: 3
-    transitions:
-      approve: implement
+  # ── Workflow: debug ───────────────────────────────────────────────────────
+  # Triggered by the "debug" label on Linear issues.
+  # Lightweight workflow for bug investigation and quick fixes.
+  # ──────────────────────────────────────────────────────────────────────────
+  debug:
+    label: debug
 
-  # ── 3. Implement ────────────────────────────────────────────────────────
-  # Write code, create branch, run tests, open PR.
-  # Uses Sonnet for fast iteration.  Higher turn count for complex work.
-  implement:
-    type: agent
-    prompt: prompts/implement.example.md
-    linear_state: active
-    model: claude-sonnet-4-6
-    max_turns: 30
-    session: inherit
-    transitions:
-      complete: implementation-review
+    prompts:
+      global_prompt: prompts/debug/global.md
+      lifecycle_prompt: prompts/lifecycle.md
 
-  # ── 4. Implementation Review (gate) ─────────────────────────────────────
-  # Human reviews the PR before automated code review.
-  # Rework loops back to implement.
-  implementation-review:
-    type: gate
-    linear_state: review
-    rework_to: implement
-    max_rework: 5
-    transitions:
-      approve: code-review
+    # Per-workflow concurrency limits (optional, overrides global agent:)
+    max_concurrent_agents: 2
+    max_concurrent_agents_by_state:
+      investigate: 2
+      fix: 1
 
-  # ── 5. Code Review ─────────────────────────────────────────────────────
-  # Automated adversarial review: fresh session, no prior context.
-  # Opus reviews the diff and posts findings.
-  # Tip: set runner: codex here to get a second-opinion from a different
-  # provider — different states can use different runners in the same run.
-  code-review:
-    type: agent
-    prompt: prompts/review.example.md
-    linear_state: active
-    runner: claude              # "claude" (default), "codex", or "mux"
-    model: claude-opus-4-6
-    max_turns: 10
-    session: fresh              # no prior context — adversarial review
-    transitions:
-      complete: merge-review
+    states:
+      # Entry state (first agent state)
+      investigate:
+        type: agent
+        prompt: prompts/debug/investigate.md
+        linear_state: active
+        model: claude-opus-4-6
+        max_turns: 8
+        session: inherit
+        transitions:
+          complete: fix-review
 
-  # ── 6. Merge Review (gate) ──────────────────────────────────────────────
-  # Human reviews the code review findings and decides to merge or rework.
-  # Rework goes back to implement (not code-review).
-  merge-review:
-    type: gate
-    linear_state: review
-    rework_to: implement
-    max_rework: 5
-    transitions:
-      approve: merge
+      fix-review:
+        type: gate
+        linear_state: review
+        rework_to: investigate
+        max_rework: 2
+        transitions:
+          approve: fix
 
-  # ── 7. Merge ────────────────────────────────────────────────────────────
-  # Merge the PR and clean up.  Short turn count — just the merge.
-  merge:
-    type: agent
-    prompt: prompts/merge.example.md
-    linear_state: active
-    max_turns: 5
-    session: inherit
-    transitions:
-      complete: done
+      fix:
+        type: agent
+        prompt: prompts/debug/fix.md
+        linear_state: active
+        model: claude-sonnet-4-6
+        max_turns: 15
+        session: inherit
+        transitions:
+          complete: pr-review
 
-  # ── 8. Done (terminal) ─────────────────────────────────────────────────
-  done:
-    type: terminal
-    linear_state: terminal
+      pr-review:
+        type: gate
+        linear_state: review
+        rework_to: fix
+        max_rework: 3
+        transitions:
+          approve: done
+
+      done:
+        type: terminal
+        linear_state: terminal
+
+  # ── Workflow: feature ───────────────────────────────────────────────────
+  # Triggered by the "feature" label on Linear issues.
+  # Full workflow for feature development with multiple review gates.
+  # Marked as default — used for issues without matching labels.
+  # ──────────────────────────────────────────────────────────────────────────
+  feature:
+    label: feature
+    default: true                 # Fallback for issues without matching labels
+
+    prompts:
+      global_prompt: prompts/feature/global.md
+      lifecycle_prompt: prompts/lifecycle.md
+
+    # Per-workflow concurrency limits
+    max_concurrent_agents: 4
+    max_concurrent_agents_by_state:
+      investigate: 2
+      implement: 2
+      code-review: 1              # Serial reviews prevent merge conflicts
+
+    states:
+      # Entry state (first agent state)
+      investigate:
+        type: agent
+        prompt: prompts/feature/investigate.md
+        linear_state: active
+        model: claude-opus-4-6
+        max_turns: 8
+        session: inherit
+        transitions:
+          complete: research-review
+
+      research-review:
+        type: gate
+        linear_state: review
+        rework_to: investigate
+        max_rework: 3
+        transitions:
+          approve: implement
+
+      implement:
+        type: agent
+        prompt: prompts/feature/implement.md
+        linear_state: active
+        model: claude-sonnet-4-6
+        max_turns: 30
+        session: inherit
+        transitions:
+          complete: implementation-review
+
+      implementation-review:
+        type: gate
+        linear_state: review
+        rework_to: implement
+        max_rework: 5
+        transitions:
+          approve: code-review
+
+      code-review:
+        type: agent
+        prompt: prompts/feature/review.md
+        linear_state: active
+        runner: claude
+        model: claude-opus-4-6
+        max_turns: 10
+        session: fresh              # Fresh session for adversarial review
+        transitions:
+          complete: merge-review
+
+      merge-review:
+        type: gate
+        linear_state: review
+        rework_to: implement
+        max_rework: 5
+        transitions:
+          approve: merge
+
+      merge:
+        type: agent
+        prompt: prompts/feature/merge.md
+        linear_state: active
+        max_turns: 5
+        session: inherit
+        transitions:
+          complete: done
+
+      done:
+        type: terminal
+        linear_state: terminal
+
+  # ── Workflow: docs ──────────────────────────────────────────────────────
+  # Triggered by the "docs" label on Linear issues.
+  # Simple workflow for documentation updates.
+  # ──────────────────────────────────────────────────────────────────────────
+  docs:
+    label: docs
+
+    prompts:
+      global_prompt: prompts/docs/global.md
+      lifecycle_prompt: prompts/lifecycle.md
+
+    max_concurrent_agents: 2
+
+    states:
+      write:
+        type: agent
+        prompt: prompts/docs/write.md
+        linear_state: active
+        model: claude-sonnet-4-6
+        max_turns: 10
+        session: inherit
+        transitions:
+          complete: review
+
+      review:
+        type: gate
+        linear_state: review
+        rework_to: write
+        max_rework: 3
+        transitions:
+          approve: done
+
+      done:
+        type: terminal
+        linear_state: terminal
