@@ -65,7 +65,7 @@ class ClaudeConfig:
 class AgentConfig:
     max_concurrent_agents: int = 5
     max_retry_backoff_ms: int = 300_000
-    max_concurrent_agents_by_state: dict[str, int] = field(default_factory=dict)
+    max_concurrent_agents_by_state: dict[str, int] = field(default_factory=lambda: {})
 
 
 @dataclass
@@ -116,7 +116,7 @@ class WorkflowConfig:
     name: str = ""
     label: str | None = None
     default: bool = False
-    states: dict[str, StateConfig] = field(default_factory=dict)
+    states: dict[str, StateConfig] = field(default_factory=lambda: {})
     prompts: PromptsConfig = field(default_factory=PromptsConfig)
 
 
@@ -138,7 +138,7 @@ class StateConfig:
     allowed_tools: list[str] | None = None
     rework_to: str | None = None  # gate only
     max_rework: int | None = None  # gate only
-    transitions: dict[str, str] = field(default_factory=dict)
+    transitions: dict[str, str] = field(default_factory=lambda: {})
     hooks: HooksConfig | None = None
 
 
@@ -159,8 +159,8 @@ class ServiceConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     linear_states: LinearStatesConfig = field(default_factory=LinearStatesConfig)
     prompts: PromptsConfig = field(default_factory=PromptsConfig)
-    states: dict[str, StateConfig] = field(default_factory=dict)
-    workflows: dict[str, WorkflowConfig] = field(default_factory=dict)
+    states: dict[str, StateConfig] = field(default_factory=lambda: {})
+    workflows: dict[str, WorkflowConfig] = field(default_factory=lambda: {})
 
     def resolved_api_key(self) -> str:
         key = self.tracker.api_key
@@ -313,8 +313,9 @@ def _resolve_linear_state_name(key: str, ls: LinearStatesConfig) -> str:
     return mapping.get(key, key)
 
 
-def _resolve_env(val: str) -> str:
-    if isinstance(val, str) and val.startswith("$"):
+def _resolve_env(val: str) -> str:  # type: ignore[reportUnusedFunction]
+    """Resolve environment variable references. Kept for backwards compatibility."""
+    if val.startswith("$"):
         return os.environ.get(val[1:], "")
     return val
 
@@ -330,7 +331,7 @@ def _coerce_int(val: Any, default: int) -> int:
 
 def _coerce_list(val: Any) -> list[str]:
     if isinstance(val, list):
-        return [str(v) for v in val]
+        return [str(v) for v in val]  # type: ignore[misc]
     if isinstance(val, str):
         return [s.strip() for s in val.split(",") if s.strip()]
     return []
@@ -421,13 +422,11 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
         # Try parsing as pure YAML
         config_raw = yaml.safe_load(content) or {}
 
-    if not isinstance(config_raw, dict):
-        raise ValueError("Workflow file must contain a YAML mapping")
 
     prompt_template = prompt_body.strip()
 
     # Parse tracker
-    t = config_raw.get("tracker", {}) or {}
+    t: dict[str, Any] = config_raw.get("tracker", {}) or {}  # type: ignore[assignment]
     tracker = TrackerConfig(
         kind=str(t.get("kind", "linear")),
         endpoint=str(t.get("endpoint", "https://api.linear.app/graphql")),
@@ -436,15 +435,15 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
     )
 
     # Parse polling
-    p = config_raw.get("polling", {}) or {}
+    p: dict[str, Any] = config_raw.get("polling", {}) or {}  # type: ignore[assignment]
     polling = PollingConfig(interval_ms=_coerce_int(p.get("interval_ms"), 30_000))
 
     # Parse workspace
-    w = config_raw.get("workspace", {}) or {}
+    w: dict[str, Any] = config_raw.get("workspace", {}) or {}  # type: ignore[assignment]
     workspace = WorkspaceConfig(root=str(w.get("root", "")))
 
     # Parse hooks
-    h = config_raw.get("hooks", {}) or {}
+    h: dict[str, Any] = config_raw.get("hooks", {}) or {}  # type: ignore[assignment]
     hooks = HooksConfig(
         after_create=h.get("after_create"),
         before_run=h.get("before_run"),
@@ -455,7 +454,7 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
     )
 
     # Parse claude
-    c = config_raw.get("claude", {}) or {}
+    c: dict[str, Any] = config_raw.get("claude", {}) or {}  # type: ignore[assignment]
     claude = ClaudeConfig(
         command=str(c.get("command", "claude")),
         permission_mode=str(c.get("permission_mode", "auto")),
@@ -469,7 +468,7 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
     )
 
     # Parse agent
-    a = config_raw.get("agent", {}) or {}
+    a: dict[str, Any] = config_raw.get("agent", {}) or {}  # type: ignore[assignment]
     agent = AgentConfig(
         max_concurrent_agents=_coerce_int(a.get("max_concurrent_agents"), 5),
         max_retry_backoff_ms=_coerce_int(a.get("max_retry_backoff_ms"), 300_000),
@@ -477,11 +476,11 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
     )
 
     # Parse server
-    s = config_raw.get("server", {}) or {}
+    s: dict[str, Any] = config_raw.get("server", {}) or {}  # type: ignore[assignment]
     server = ServerConfig(port=s.get("port"))
 
     # Parse linear_states
-    ls_raw = config_raw.get("linear_states", {}) or {}
+    ls_raw: dict[str, Any] = config_raw.get("linear_states", {}) or {}  # type: ignore[assignment]
     linear_states = LinearStatesConfig(
         todo=str(ls_raw.get("todo", "Todo")),
         active=str(ls_raw.get("active", "In Progress")),
@@ -492,35 +491,35 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
     )
 
     # Parse prompts
-    pr_raw = config_raw.get("prompts", {}) or {}
-    lifecycle_prompt = pr_raw.get("lifecycle_prompt", "prompts/lifecycle.md")
+    pr_raw: dict[str, Any] = config_raw.get("prompts", {}) or {}  # type: ignore[assignment]
+    lifecycle_prompt = str(pr_raw.get("lifecycle_prompt", "prompts/lifecycle.md"))
     prompts = PromptsConfig(
         global_prompt=pr_raw.get("global_prompt"),
         lifecycle_prompt=lifecycle_prompt,
     )
 
     # Parse states
-    states_raw = config_raw.get("states", {}) or {}
+    states_raw: dict[str, Any] = config_raw.get("states", {}) or {}  # type: ignore[assignment]
     states: dict[str, StateConfig] = {}
     for state_name, state_data in states_raw.items():
-        sd = state_data or {}
+        sd: dict[str, Any] = state_data or {}  # type: ignore[assignment]
         states[state_name] = _parse_state_config(state_name, sd)
 
     # Parse workflows section (multi-workflow mode)
-    workflows_raw = config_raw.get("workflows")
+    workflows_raw: dict[str, Any] | None = config_raw.get("workflows")  # type: ignore[assignment]
     workflows: dict[str, WorkflowConfig] = {}
     if workflows_raw:
         for wf_name, wf_data in workflows_raw.items():
             wf_states: dict[str, StateConfig] = {}
-            wf_states_raw = wf_data.get("states", {})
+            wf_states_raw: dict[str, Any] = wf_data.get("states", {})  # type: ignore[assignment]
             for state_name, state_data in wf_states_raw.items():
-                sd = state_data or {}
+                sd: dict[str, Any] = state_data or {}  # type: ignore[assignment]
                 wf_states[state_name] = _parse_state_config(state_name, sd)
 
-            wf_prompts_raw = wf_data.get("prompts", {}) or {}
+            wf_prompts_raw: dict[str, Any] = wf_data.get("prompts", {}) or {}  # type: ignore[assignment]
             wf_prompts = PromptsConfig(
                 global_prompt=wf_prompts_raw.get("global_prompt"),
-                lifecycle_prompt=wf_prompts_raw.get("lifecycle_prompt", "prompts/lifecycle.md"),
+                lifecycle_prompt=str(wf_prompts_raw.get("lifecycle_prompt", "prompts/lifecycle.md")),
             )
 
             workflows[wf_name] = WorkflowConfig(

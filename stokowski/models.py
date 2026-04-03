@@ -23,8 +23,8 @@ class Issue:
     state: str = ""
     branch_name: str | None = None
     url: str | None = None
-    labels: list[str] = field(default_factory=list)
-    blocked_by: list[BlockerRef] = field(default_factory=list)
+    labels: list[str] = field(default_factory=lambda: [])
+    blocked_by: list[BlockerRef] = field(default_factory=lambda: [])
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

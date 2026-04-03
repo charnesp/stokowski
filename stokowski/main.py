@@ -259,7 +259,7 @@ async def run_orchestrator(workflow_path: str, port: int | None = None):
                 log_level="warning",
             )
             _uvicorn_server = uvicorn.Server(server_config)
-            _uvicorn_server.install_signal_handlers = lambda: None
+            _uvicorn_server.install_signal_handlers = lambda: None  # type: ignore[attr-defined]
             _uvicorn_task = asyncio.create_task(_uvicorn_server.serve())
             console.print(f"[green]Web dashboard →[/green] http://127.0.0.1:{port}")
         except ImportError:
