@@ -125,7 +125,7 @@ class StateConfig:
     """A single state in the state machine."""
 
     name: str = ""
-    type: str = "agent"  # "agent", "gate", "terminal"
+    type: str = "agent"  # "agent", "agent-gate", "gate", "terminal"
     prompt: str | None = None  # path to prompt .md file
     linear_state: str = "active"  # key into LinearStatesConfig
     runner: str = "claude"
@@ -138,6 +138,7 @@ class StateConfig:
     allowed_tools: list[str] | None = None
     rework_to: str | None = None  # gate only
     max_rework: int | None = None  # gate only
+    default_transition: str | None = None  # agent-gate only: fallback key in transitions
     transitions: dict[str, str] = field(default_factory=lambda: {})
     hooks: HooksConfig | None = None
 
@@ -190,9 +191,9 @@ class ServiceConfig:
 
     @property
     def entry_state(self) -> str | None:
-        """Return the first agent state (first key in states dict)."""
+        """Return the first agent or agent-gate state (first key in states dict)."""
         for name, sc in self.states.items():
-            if sc.type == "agent":
+            if _is_agent_like(sc):
                 return name
         return None
 
@@ -208,17 +209,17 @@ class ServiceConfig:
         if ls.todo and ls.todo not in seen:
             seen.append(ls.todo)
 
-        # Collect agent states from root config (legacy mode)
+        # Collect agent / agent-gate states from root config (legacy mode)
         for sc in self.states.values():
-            if sc.type == "agent":
+            if _is_agent_like(sc):
                 linear_name = _resolve_linear_state_name(sc.linear_state, ls)
                 if linear_name and linear_name not in seen:
                     seen.append(linear_name)
 
-        # Collect agent states from all workflows (multi-workflow mode)
+        # Collect agent / agent-gate states from all workflows (multi-workflow mode)
         for wf in self.workflows.values():
             for sc in wf.states.values():
-                if sc.type == "agent":
+                if _is_agent_like(sc):
                     linear_name = _resolve_linear_state_name(sc.linear_state, ls)
                     if linear_name and linear_name not in seen:
                         seen.append(linear_name)
@@ -297,11 +298,16 @@ class ServiceConfig:
         return None if self.workflows else "default"
 
     def entry_state_for_workflow(self, workflow: WorkflowConfig) -> str | None:
-        """Return the first agent state for a workflow."""
+        """Return the first agent or agent-gate state for a workflow."""
         for name, sc in workflow.states.items():
-            if sc.type == "agent":
+            if _is_agent_like(sc):
                 return name
         return None
+
+
+def _is_agent_like(sc: StateConfig) -> bool:
+    """True for states that run the agent runner (poll active Linear states)."""
+    return sc.type in ("agent", "agent-gate")
 
 
 def _resolve_linear_state_name(key: str, ls: LinearStatesConfig) -> str:
@@ -373,6 +379,7 @@ def _parse_state_config(name: str, raw: dict[str, Any]) -> StateConfig:
         allowed_tools=_coerce_list(allowed) if allowed is not None else None,
         rework_to=raw.get("rework_to"),
         max_rework=raw.get("max_rework"),
+        default_transition=raw.get("default_transition"),
         transitions=raw.get("transitions") or {},
         hooks=_parse_hooks(hooks_raw) if hooks_raw else None,
     )
@@ -550,6 +557,42 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
     return WorkflowDefinition(config=cfg, prompt_template=prompt_template)
 
 
+def _validate_agent_gate_rules(
+    msg_prefix: str,
+    sc: StateConfig,
+    states_by_name: dict[str, StateConfig],
+    errors: list[str],
+) -> None:
+    """Validate agent-gate-specific constraints (shared by legacy and multi-workflow)."""
+    if not sc.prompt:
+        errors.append(f"{msg_prefix} (agent-gate) is missing 'prompt' field")
+    if sc.rework_to:
+        errors.append(
+            f"{msg_prefix} (agent-gate) must not set 'rework_to' (reserved for gate states)"
+        )
+    if sc.max_rework is not None:
+        errors.append(
+            f"{msg_prefix} (agent-gate) must not set 'max_rework' (reserved for gate states)"
+        )
+    if not sc.transitions:
+        errors.append(f"{msg_prefix} (agent-gate) must declare at least one transition")
+    if not sc.default_transition:
+        errors.append(f"{msg_prefix} (agent-gate) is missing 'default_transition'")
+    elif sc.default_transition not in sc.transitions:
+        errors.append(
+            f"{msg_prefix} (agent-gate) default_transition '{sc.default_transition}' "
+            f"must be a key in transitions"
+        )
+    else:
+        target_name = sc.transitions[sc.default_transition]
+        target_cfg = states_by_name.get(target_name)
+        if target_cfg is not None and target_cfg.type != "gate":
+            errors.append(
+                f"{msg_prefix} (agent-gate) default_transition must target a state with "
+                f"type 'gate', not '{target_cfg.type}' (target '{target_name}')"
+            )
+
+
 def validate_config(cfg: ServiceConfig, skip_secrets_check: bool = False) -> list[str]:
     """Validate state machine config for dispatch readiness. Returns list of errors.
 
@@ -584,7 +627,7 @@ def validate_config(cfg: ServiceConfig, skip_secrets_check: bool = False) -> lis
 
     for name, sc in cfg.states.items():
         # Check type
-        if sc.type not in ("agent", "gate", "terminal"):
+        if sc.type not in ("agent", "agent-gate", "gate", "terminal"):
             errors.append(f"State '{name}' has invalid type: {sc.type}")
             continue
 
@@ -593,6 +636,10 @@ def validate_config(cfg: ServiceConfig, skip_secrets_check: bool = False) -> lis
             # Agent states should have a prompt
             if not sc.prompt:
                 errors.append(f"Agent state '{name}' is missing 'prompt' field")
+
+        elif sc.type == "agent-gate":
+            has_agent = True
+            _validate_agent_gate_rules(f"State '{name}'", sc, cfg.states, errors)
 
         elif sc.type == "gate":
             # Gates must have rework_to
@@ -626,7 +673,9 @@ def validate_config(cfg: ServiceConfig, skip_secrets_check: bool = False) -> lis
     # Only require root agent/terminal states in legacy mode
     if not cfg.workflows:
         if not has_agent:
-            errors.append("No agent states defined (need at least one state with type 'agent')")
+            errors.append(
+                "No agent states defined (need at least one state with type 'agent' or 'agent-gate')"
+            )
         if not has_terminal:
             errors.append(
                 "No terminal states defined (need at least one state with type 'terminal')"
@@ -677,7 +726,7 @@ def validate_config(cfg: ServiceConfig, skip_secrets_check: bool = False) -> lis
 
             for state_name, sc in wf.states.items():
                 # Check type
-                if sc.type not in ("agent", "gate", "terminal"):
+                if sc.type not in ("agent", "agent-gate", "gate", "terminal"):
                     errors.append(
                         f"Workflow '{wf_name}' state '{state_name}' has invalid type: {sc.type}"
                     )
@@ -689,6 +738,15 @@ def validate_config(cfg: ServiceConfig, skip_secrets_check: bool = False) -> lis
                         errors.append(
                             f"Workflow '{wf_name}' agent state '{state_name}' is missing 'prompt' field"
                         )
+
+                elif sc.type == "agent-gate":
+                    wf_has_agent = True
+                    _validate_agent_gate_rules(
+                        f"Workflow '{wf_name}' state '{state_name}'",
+                        sc,
+                        wf.states,
+                        errors,
+                    )
 
                 elif sc.type == "gate":
                     if not sc.rework_to:

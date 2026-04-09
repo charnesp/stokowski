@@ -1,5 +1,7 @@
 """Tests for prompt assembly module."""
 
+from pathlib import Path
+
 import pytest
 
 from stokowski.config import LinearStatesConfig, PromptsConfig, ServiceConfig, StateConfig
@@ -137,6 +139,37 @@ class TestBuildLifecycleSection:
         assert "complete:review" in result
         assert "fail:rework" in result
 
+    def test_agent_gate_lifecycle_includes_routing_contract(self):
+        """Agent-gate states document STOKOWSKI_ROUTE markers, report tags, and keys."""
+        repo_root = Path(__file__).resolve().parent.parent
+        lifecycle_template = (repo_root / "prompts" / "lifecycle.md").read_text()
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+        state_cfg = StateConfig(
+            name="route",
+            type="agent-gate",
+            prompt="prompts/route.md",
+            default_transition="to_human",
+            transitions={"findings": "fix", "to_human": "human"},
+        )
+        result = build_lifecycle_section(
+            lifecycle_template=lifecycle_template,
+            issue=issue,
+            state_name="route",
+            state_cfg=state_cfg,
+            linear_states=LinearStatesConfig(),
+        )
+        lower = result.lower()
+        assert "<<<stokowski_route>>>" in lower
+        assert "<<<end_stokowski_route>>>" in lower
+        assert "<stokowski:report>" in lower
+        assert "findings" in result
+        assert "to_human" in result
+
     def test_renders_recent_comments(self):
         """Recent comments available in template context."""
         issue = Issue(
@@ -195,6 +228,29 @@ class TestLifecycleContext:
         assert "transitions" in context
         assert "has_gate_transition" in context
         assert "gate_targets" in context
+
+    def test_agent_gate_context_flags(self):
+        """Agent-gate exposes is_agent_gate and default transition key to templates."""
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+        context = build_lifecycle_context(
+            issue=issue,
+            state_name="route",
+            state_cfg=StateConfig(
+                name="route",
+                type="agent-gate",
+                prompt="p.md",
+                default_transition="fallback",
+                transitions={"a": "b"},
+            ),
+            linear_states=LinearStatesConfig(),
+        )
+        assert context["is_agent_gate"] is True
+        assert context["agent_gate_default_transition"] == "fallback"
 
 
 class TestRenderTemplate:

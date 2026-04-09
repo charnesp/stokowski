@@ -14,6 +14,7 @@ from typing import Any
 
 from jinja2 import Environment, StrictUndefined, TemplateSyntaxError, select_autoescape
 
+from .agent_gate_route import decide_agent_gate_transition, format_route_error_comment
 from .config import (
     ServiceConfig,
     WorkflowConfig,
@@ -267,6 +268,34 @@ class Orchestrator:
             logger.error(f"Failed to resolve workflow for {issue.identifier}: {e}")
             return None
 
+    def _workflow_for_run_attempt(self, issue: Issue, attempt: RunAttempt) -> WorkflowConfig | None:
+        """Resolve workflow for a run: cache, frozen attempt.workflow_name, then labels."""
+        cached = self._issue_workflow_cache.get(issue.id)
+        if cached is not None:
+            return cached
+        name = attempt.workflow_name
+        if name and self.cfg.workflows and name in self.cfg.workflows:
+            wf = self.cfg.workflows[name]
+            self._issue_workflow_cache[issue.id] = wf
+            return wf
+        if not self.cfg.workflows:
+            return WorkflowConfig(
+                name="default",
+                default=True,
+                states=self.cfg.states,
+                prompts=self.cfg.prompts,
+            )
+        try:
+            wf = self.cfg.get_workflow_for_issue(issue)
+            self._issue_workflow_cache[issue.id] = wf
+            return wf
+        except ValueError:
+            logger.error(
+                f"Cannot resolve workflow for {issue.identifier} "
+                f"(workflow_name={attempt.workflow_name!r}, labels={getattr(issue, 'labels', [])})"
+            )
+            return None
+
     async def _resolve_current_state(self, issue: Issue) -> tuple[str, int]:
         """Resolve current state machine state for an issue.
         Returns (state_name, run).
@@ -475,7 +504,7 @@ class Orchestrator:
         Handles target types:
         - terminal → move to Done, clean workspace, release tracking
         - gate → enter gate
-        - agent → post state comment, ensure active Linear state, schedule retry
+        - agent / agent-gate → post state comment, ensure active Linear state, schedule retry
         """
         current_state_name = self._issue_current_state.get(issue.id)
         if not current_state_name:
@@ -866,17 +895,18 @@ class Orchestrator:
             return
 
         workflow_name = workflow.name
+        self._issue_workflow_cache[issue.id] = workflow
 
         state_name = self._issue_current_state.get(issue.id)
         if not state_name:
             state_name = self.cfg.entry_state_for_workflow(workflow)
 
+        state_cfg = workflow.states.get(state_name) if state_name else None
+
         # If at a gate, enter it instead of dispatching a worker
-        if state_name:
-            state_cfg = workflow.states.get(state_name)
-            if state_cfg and state_cfg.type == "gate":
-                asyncio.create_task(self._safe_enter_gate(issue, state_name, workflow_name))
-                return
+        if state_name and state_cfg and state_cfg.type == "gate":
+            asyncio.create_task(self._safe_enter_gate(issue, state_name, workflow_name))
+            return
 
         attempt = RunAttempt(
             issue_id=issue.id,
@@ -918,13 +948,13 @@ class Orchestrator:
     async def _run_worker(self, issue: Issue, attempt: RunAttempt):
         """Worker coroutine: prepare workspace, run agent turns."""
         try:
-            # Resolve workflow for this issue
-            try:
-                workflow = self.cfg.get_workflow_for_issue(issue)
-            except ValueError as e:
-                logger.error(f"Workflow resolution failed for {issue.identifier}: {e}")
+            workflow = self._workflow_for_run_attempt(issue, attempt)
+            if workflow is None:
+                logger.error(f"Workflow resolution failed for {issue.identifier}")
                 attempt.status = "failed"
-                attempt.error = f"No workflow matches issue labels: {getattr(issue, 'labels', [])}"
+                attempt.error = (
+                    f"No workflow matches issue labels: {getattr(issue, 'labels', [])}"
+                )
                 self._on_worker_exit(issue, attempt)
                 return
             workflow_states = workflow.states
@@ -1240,14 +1270,19 @@ class Orchestrator:
         if not attempt.full_output:
             return
 
-        # Fetch comments and parse tracking to get workflow from tracking comment
-        client = self._ensure_linear_client()
-        comments = await client.fetch_comments(issue.id)
-        tracking = parse_latest_tracking(comments)
+        workflow = self._workflow_for_run_attempt(issue, attempt)
+        if workflow is None:
+            client = self._ensure_linear_client()
+            comments = await client.fetch_comments(issue.id)
+            tracking = parse_latest_tracking(comments)
+            workflow = await self._resolve_workflow_for_issue(issue, tracking)
 
-        # Resolve workflow for this issue (using tracking to get stored workflow)
-        workflow = await self._resolve_workflow_for_issue(issue, tracking)
-        workflow_states = workflow.states if workflow else self.cfg.states
+        if workflow is not None:
+            workflow_states = workflow.states
+        elif self.cfg.workflows:
+            workflow_states = {}
+        else:
+            workflow_states = self.cfg.states
 
         # Determine if next state is a gate
         is_gate = False
@@ -1293,6 +1328,78 @@ class Orchestrator:
         except Exception as e:
             logger.error(f"Error posting work report for {issue.identifier}: {e}")
 
+    async def _finalize_agent_gate_turn(
+        self,
+        issue: Issue,
+        attempt: RunAttempt,
+        workflow: WorkflowConfig | None,
+    ) -> None:
+        """Resolve routing from output, post report or routing-error comment, then transition."""
+        if not attempt.state_name:
+            logger.warning(
+                f"Agent-gate finalize skipped for {issue.identifier}: missing state_name"
+            )
+            self.claimed.discard(issue.id)
+            return
+
+        if workflow is not None:
+            states = workflow.states
+        elif self.cfg.workflows:
+            states = {}
+        else:
+            states = self.cfg.states
+
+        state_cfg = states.get(attempt.state_name)
+        if not state_cfg or state_cfg.type != "agent-gate":
+            logger.warning(
+                f"Agent-gate finalize skipped for {issue.identifier}: "
+                f"state {attempt.state_name!r} is not agent-gate in resolved workflow"
+            )
+            self.claimed.discard(issue.id)
+            return
+
+        chosen, route_err = decide_agent_gate_transition(attempt.full_output or "", state_cfg)
+        client = self._ensure_linear_client()
+
+        if route_err:
+            try:
+                await client.post_comment(issue.id, format_route_error_comment(route_err))
+            except Exception as e:
+                logger.error(f"Failed to post route error for {issue.identifier}: {e}")
+        else:
+            workflow_states = states
+            target_name = state_cfg.transitions.get(chosen)
+            is_gate = False
+            if target_name:
+                tcfg = workflow_states.get(target_name)
+                is_gate = bool(tcfg and tcfg.type == "gate")
+
+            report_content = extract_report(attempt.full_output)
+            logger.info(
+                f"Agent-gate report for {issue.identifier}: "
+                f"{'found' if report_content else 'not found'}"
+            )
+            try:
+                if report_content:
+                    comment = format_report_comment(
+                        report_content=report_content,
+                        issue=issue,
+                        state_name=attempt.state_name,
+                        run=attempt.attempt or 1,
+                        is_gate=is_gate,
+                    )
+                else:
+                    comment = format_no_report_comment(
+                        issue=issue,
+                        state_name=attempt.state_name or "unknown",
+                        run=attempt.attempt or 1,
+                    )
+                await client.post_comment(issue.id, comment)
+            except Exception as e:
+                logger.error(f"Error posting agent-gate report for {issue.identifier}: {e}")
+
+        await self._safe_transition(issue, chosen)
+
     def _on_worker_exit(self, issue: Issue, attempt: RunAttempt):
         """Handle worker completion."""
         self.total_input_tokens += attempt.input_tokens
@@ -1310,27 +1417,39 @@ class Orchestrator:
         if attempt.status != "canceled":
             self._last_completed_at[issue.id] = completed_at
 
-        # Post work report (async)
-        if attempt.full_output:
+        workflow_for_exit = self._workflow_for_run_attempt(issue, attempt)
+
+        if workflow_for_exit is not None:
+            states_to_check = workflow_for_exit.states
+        elif self.cfg.workflows:
+            states_to_check = {}
+        else:
+            states_to_check = self.cfg.states
+        st_exit = states_to_check.get(attempt.state_name) if attempt.state_name else None
+        agent_gate_finalize = (
+            attempt.status == "succeeded"
+            and st_exit is not None
+            and st_exit.type == "agent-gate"
+            and attempt.state_name in states_to_check
+        )
+
+        # Post work report (async) — agent-gate success uses _finalize_agent_gate_turn instead
+        if attempt.full_output and not agent_gate_finalize:
             asyncio.create_task(self._post_work_report(issue, attempt, attempt.state_name))
 
         self.running.pop(issue.id, None)
         self._tasks.pop(issue.id, None)
 
         if attempt.status == "succeeded":
-            # Resolve workflow to check if state exists in workflow-scoped states
-            workflow = self._issue_workflow_cache.get(issue.id)
-            if workflow is None:
-                try:
-                    workflow = self.cfg.get_workflow_for_issue(issue)
-                except ValueError:
-                    workflow = None
-
             # Check if state exists in workflow-scoped states (or root states for legacy)
-            states_to_check = workflow.states if workflow else self.cfg.states
             if attempt.state_name and attempt.state_name in states_to_check:
-                # State machine mode: transition via "complete"
-                asyncio.create_task(self._safe_transition(issue, "complete"))
+                if agent_gate_finalize:
+                    asyncio.create_task(
+                        self._finalize_agent_gate_turn(issue, attempt, workflow_for_exit)
+                    )
+                else:
+                    # State machine mode: transition via "complete"
+                    asyncio.create_task(self._safe_transition(issue, "complete"))
             else:
                 # Legacy mode
                 self._schedule_retry(issue, attempt_num=1, delay_ms=1000)
