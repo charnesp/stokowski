@@ -65,7 +65,7 @@ class TestDecideAgentGateTransition:
 
     def test_start_without_end_marker_uses_default_no_crash(self):
         cfg = _gate_state_cfg()
-        bad = "<<<STOKOWSKI_ROUTE>>>\n{\"transition\": \"pick_a\"}\n"
+        bad = '<<<STOKOWSKI_ROUTE>>>\n{"transition": "pick_a"}\n'
         key, err = decide_agent_gate_transition(bad, cfg)
         assert key == "fallback"
         assert err is not None

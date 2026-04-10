@@ -12,6 +12,15 @@ from stokowski.models import Issue, RunAttempt
 from stokowski.orchestrator import Orchestrator
 from stokowski.tracking import make_gate_comment, make_state_comment
 
+
+def _assert_single_await(mock: AsyncMock):
+    """Narrow AsyncMock.await_args for pyright (await_args may be typed as optional)."""
+    mock.assert_awaited_once()
+    call = mock.await_args
+    assert call is not None
+    return call
+
+
 AG_GATE_YAML = """
 tracker:
   project_slug: test-project
@@ -522,9 +531,9 @@ async def test_worker_exit_label_workflow_mismatch_orphans_config_error_not_tran
         orch._on_worker_exit(issue, attempt)
         await asyncio.gather(*bg_tasks)
 
-    mock_handle_orphan.assert_awaited_once()
-    assert "label/workflow mismatch" in mock_handle_orphan.await_args.args[1]
-    assert mock_handle_orphan.await_args.kwargs.get("release_agent_resources") is True
+    call = _assert_single_await(mock_handle_orphan)
+    assert "label/workflow mismatch" in call.args[1]
+    assert call.kwargs.get("release_agent_resources") is True
     mock_safe.assert_not_called()
 
 
@@ -583,8 +592,8 @@ async def test_worker_exit_unknown_workflow_name_orphans_not_label_fallback(tmp_
         await asyncio.gather(*bg_tasks)
 
     mock_wf_for_attempt.assert_not_called()
-    mock_handle_orphan.assert_awaited_once()
-    assert "not defined" in mock_handle_orphan.await_args.args[1].lower()
+    call = _assert_single_await(mock_handle_orphan)
+    assert "not defined" in call.args[1].lower()
     mock_safe.assert_not_called()
 
 
@@ -609,10 +618,10 @@ async def test_handle_gate_responses_missing_gate_state_logs_and_orphans(tmp_pat
     ):
         await orch._handle_gate_responses()
 
-    mock_handle.assert_awaited_once()
-    ctx = mock_handle.await_args.args[1]
+    call = _assert_single_await(mock_handle)
+    ctx = call.args[1]
     assert "gate state could not be recovered" in ctx.lower()
-    assert mock_handle.await_args.kwargs.get("release_agent_resources") is True
+    assert call.kwargs.get("release_agent_resources") is True
 
 
 @pytest.mark.asyncio
@@ -672,8 +681,8 @@ async def test_handle_gate_approval_invalid_target_orphans_no_approved_tracking(
     ):
         await orch._handle_gate_responses()
 
-    mock_handle.assert_awaited_once()
-    assert "invalid approve" in mock_handle.await_args.args[1].lower()
+    call = _assert_single_await(mock_handle)
+    assert "invalid approve" in call.args[1].lower()
     for call in mock_client.post_comment.await_args_list:
         body = call[0][1]
         assert "Gate **human** approved" not in body
@@ -707,8 +716,8 @@ async def test_handle_rework_max_exceeded_orphans(tmp_path):
     ):
         await orch._handle_gate_responses()
 
-    mock_handle.assert_awaited_once()
-    assert "max rework exceeded" in mock_handle.await_args.args[1].lower()
+    call = _assert_single_await(mock_handle)
+    assert "max rework exceeded" in call.args[1].lower()
     escalated = [c[0][1] for c in mock_client.post_comment.await_args_list]
     assert any("escalated" in b.lower() or "Max rework" in b for b in escalated)
 
@@ -736,8 +745,8 @@ async def test_handle_rework_missing_rework_to_orphans(tmp_path):
     ):
         await orch._handle_gate_responses()
 
-    mock_handle.assert_awaited_once()
-    assert "rework_to" in mock_handle.await_args.args[1].lower()
+    call = _assert_single_await(mock_handle)
+    assert "rework_to" in call.args[1].lower()
 
 
 @pytest.mark.asyncio
@@ -763,8 +772,8 @@ async def test_handle_rework_invalid_rework_to_orphans(tmp_path):
     ):
         await orch._handle_gate_responses()
 
-    mock_handle.assert_awaited_once()
-    assert "invalid rework" in mock_handle.await_args.args[1].lower()
+    call = _assert_single_await(mock_handle)
+    assert "invalid rework" in call.args[1].lower()
 
 
 def test_workflow_for_run_attempt_fallback_to_attempt_name_when_get_workflow_fails(tmp_path):
@@ -822,8 +831,7 @@ async def test_worker_exit_success_unresolved_workflow_orphans_not_legacy_retry(
         orch._on_worker_exit(issue, attempt)
         await asyncio.gather(*bg_tasks)
 
-    mock_handle_orphan.assert_awaited_once()
-    call = mock_handle_orphan.await_args
+    call = _assert_single_await(mock_handle_orphan)
     assert call.args[0] is issue
     assert "worker exit" in call.args[1].lower()
     assert call.kwargs.get("release_agent_resources") is True
@@ -869,8 +877,7 @@ async def test_worker_exit_failed_unresolved_workflow_orphans_not_retry(tmp_path
         orch._on_worker_exit(issue, attempt)
         await asyncio.gather(*bg_tasks)
 
-    mock_handle_orphan.assert_awaited_once()
-    call = mock_handle_orphan.await_args
+    call = _assert_single_await(mock_handle_orphan)
     assert "after agent failure" in call.args[1].lower()
     assert call.kwargs.get("release_agent_resources") is True
     mock_schedule.assert_not_called()
