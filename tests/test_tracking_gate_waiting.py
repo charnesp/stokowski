@@ -34,7 +34,9 @@ def test_parse_latest_gate_waiting_finds_waiting_when_latest_tracking_is_state()
     """Latest overall tracking may be a state entry; last waiting gate must still be found."""
     c1 = {"body": make_gate_comment("human", "waiting", workflow="default")}
     c2 = {"body": make_state_comment("start", run=2, workflow="default")}
-    assert parse_latest_tracking([c1, c2])["type"] == "state"
+    latest = parse_latest_tracking([c1, c2])
+    assert latest is not None
+    assert latest["type"] == "state"
     got = parse_latest_gate_waiting([c1, c2])
     assert got is not None
     assert got["state"] == "human"

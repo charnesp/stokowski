@@ -740,9 +740,7 @@ class Orchestrator:
 
             if gate_state:
                 # Resolve workflow for this issue (using tracking to get stored workflow)
-                workflow = await self._resolve_workflow_for_issue(
-                    issue, tracking_for_resolve
-                )
+                workflow = await self._resolve_workflow_for_issue(issue, tracking_for_resolve)
                 if workflow is None:
                     logger.error(
                         f"Cannot handle gate approval for {issue.identifier}: no workflow found"
@@ -836,15 +834,11 @@ class Orchestrator:
 
             if gate_state:
                 # Resolve workflow for this issue (using tracking to get stored workflow)
-                workflow = await self._resolve_workflow_for_issue(
-                    issue, tracking_for_resolve
-                )
+                workflow = await self._resolve_workflow_for_issue(issue, tracking_for_resolve)
                 if workflow is None:
                     logger.error(f"Cannot handle rework for {issue.identifier}: no workflow found")
                     # Issue is orphaned - move to terminal state to prevent stuck state
-                    await self._handle_orphaned_issue(
-                        issue, "rework", release_agent_resources=True
-                    )
+                    await self._handle_orphaned_issue(issue, "rework", release_agent_resources=True)
                     continue
                 workflow_states = workflow.states
 
@@ -1105,9 +1099,7 @@ class Orchestrator:
             if workflow is None:
                 logger.error(f"Workflow resolution failed for {issue.identifier}")
                 attempt.status = "failed"
-                attempt.error = (
-                    f"No workflow matches issue labels: {getattr(issue, 'labels', [])}"
-                )
+                attempt.error = f"No workflow matches issue labels: {getattr(issue, 'labels', [])}"
                 self._on_worker_exit(issue, attempt)
                 return
             workflow_states = workflow.states
@@ -1577,9 +1569,7 @@ class Orchestrator:
                 issue, attempt
             )
 
-        workflow_for_exit = (
-            None if name_undef else self._workflow_for_run_attempt(issue, attempt)
-        )
+        workflow_for_exit = None if name_undef else self._workflow_for_run_attempt(issue, attempt)
 
         if workflow_for_exit is not None:
             states_to_check = workflow_for_exit.states
@@ -1626,9 +1616,7 @@ class Orchestrator:
                     f"Workflow config error after worker exit for {issue.identifier}: "
                     f"{config_error_ctx}"
                 )
-                asyncio.create_task(
-                    self._safe_orphan_from_worker_exit(issue, config_error_ctx)
-                )
+                asyncio.create_task(self._safe_orphan_from_worker_exit(issue, config_error_ctx))
             elif workflow_unresolved:
                 logger.warning(
                     f"Workflow unresolved after worker exit for {issue.identifier} "
@@ -1659,9 +1647,7 @@ class Orchestrator:
                     f"Workflow config error after {attempt.status} for {issue.identifier}: "
                     f"{config_error_ctx}"
                 )
-                asyncio.create_task(
-                    self._safe_orphan_from_worker_exit(issue, config_error_ctx)
-                )
+                asyncio.create_task(self._safe_orphan_from_worker_exit(issue, config_error_ctx))
             elif workflow_unresolved:
                 logger.warning(
                     f"Workflow unresolved after {attempt.status} for {issue.identifier} "
