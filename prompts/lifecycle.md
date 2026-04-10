@@ -54,6 +54,24 @@ The following items need explicit approval before proceeding:
 ```
 
 {% endif %}
+{% if is_agent_gate %}
+### Agent-gate: machine routing
+
+This state **chooses the next workflow step automatically** from your output. You MUST do both:
+
+1. **Structured work report** — include `<stokowski:report>...</stokowski:report>` as required above (human-readable rationale on Linear).
+
+2. **Routing JSON** — wrap a single JSON object exactly like this (markers and field name are mandatory):
+
+```
+<<<STOKOWSKI_ROUTE>>>
+{"transition": "<transition_key>"}
+<<<END_STOKOWSKI_ROUTE>>>
+```
+
+Use a **transition key** from the list below (same keys as in **Transitions**). If the block is missing, malformed, or the key is unknown, Stokowski falls back to **`{{ agent_gate_default_transition }}`** and posts an error note on the issue.
+
+{% endif %}
 ## Lifecycle Context
 
 - **Issue:** {{ issue.identifier }} — {{ issue.title }}

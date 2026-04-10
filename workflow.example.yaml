@@ -22,9 +22,14 @@
 #   terminal      → list of done/closed states
 #
 # State types:
-#   agent    — Stokowski dispatches Claude Code in this state
-#   gate     — pauses for human review; approve → next, rework → rework_to
-#   terminal — issue is finished; workspace cleaned up
+#   agent       — Stokowski dispatches Claude Code in this state
+#   agent-gate  — one agent turn, then machine routing from <<<STOKOWSKI_ROUTE>>> JSON
+#                 (requires default_transition → a gate, plus named transitions; see below)
+#   gate        — pauses for human review; approve → next, rework → rework_to
+#   terminal    — issue is finished; workspace cleaned up
+#
+# Example (see workflow "feature"): after an agent code-review, an agent-gate can route
+# to a "fix findings" agent state that loops back into code-review, or to a human gate.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -65,7 +70,7 @@ polling:
 # Workspace
 # -----------------------------------------------------------------------------
 workspace:
-  root: ~/code/stokowski-workspaces
+  root: ~/stokowski-workspaces
 
 # -----------------------------------------------------------------------------
 # Hooks — shell scripts run in the workspace directory
@@ -204,6 +209,7 @@ workflows:
       investigate: 2
       implement: 2
       code-review: 1              # Serial reviews prevent merge conflicts
+      correct-findings-code-review: 2
 
     states:
       # Entry state (first agent state)
@@ -252,7 +258,29 @@ workflows:
         max_turns: 10
         session: fresh              # Fresh session for adversarial review
         transitions:
-          complete: merge-review
+          complete: review-findings-route
+
+      # After automated code review: machine routing — findings → fix pass → code-review again;
+      # clean → human merge gate. On invalid routing output, default sends to merge-review.
+      review-findings-route:
+        type: agent-gate
+        prompt: prompts/feature/review-findings-route.md
+        linear_state: active
+        default_transition: needs_human
+        transitions:
+          has_findings: correct-findings-code-review
+          clean: merge-review
+          needs_human: merge-review
+
+      correct-findings-code-review:
+        type: agent
+        prompt: prompts/feature/correct-findings-code-review.md
+        linear_state: active
+        model: claude-sonnet-4-6
+        max_turns: 15
+        session: inherit
+        transitions:
+          complete: code-review
 
       merge-review:
         type: gate

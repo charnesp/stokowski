@@ -154,14 +154,20 @@ def build_lifecycle_context(
                 gate_targets.append((trigger, target))
 
     # Add lifecycle-specific variables
-    context.update({
-        "previous_error": previous_error or "",
-        "is_rework": is_rework,
-        "recent_comments": recent_comments or [],
-        "transitions": state_cfg.transitions or {},
-        "has_gate_transition": has_gate_transition,
-        "gate_targets": gate_targets,
-    })
+    context.update(
+        {
+            "previous_error": previous_error or "",
+            "is_rework": is_rework,
+            "recent_comments": recent_comments or [],
+            "transitions": state_cfg.transitions or {},
+            "has_gate_transition": has_gate_transition,
+            "gate_targets": gate_targets,
+            "is_agent_gate": state_cfg.type == "agent-gate",
+            "agent_gate_default_transition": (
+                (state_cfg.default_transition or "") if state_cfg.type == "agent-gate" else ""
+            ),
+        }
+    )
 
     return context
 

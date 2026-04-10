@@ -25,6 +25,7 @@ The agent prompt, runtime config, and workspace setup all live in `workflow.yaml
 
 ```
 stokowski/
+  agent_gate_route.py  Parse <<<STOKOWSKI_ROUTE>>> JSON + format routing-error comments
   config.py        workflow.yaml parser + typed config dataclasses
   linear.py        Linear GraphQL client (httpx async)
   models.py        Domain models: Issue, RunAttempt, RetryEntry
@@ -59,7 +60,9 @@ All state lives in memory. The orchestrator recovers from restart by re-polling 
 The operator's `workflow.yaml` defines the runtime config and state machine. Stokowski re-parses it on every poll tick — config changes take effect without restart. Both `.yaml` and legacy `.md` (YAML front matter + Jinja2 body) formats are supported. Prompt templates are now separate `.md` files referenced by path from the config.
 
 ### State machine workflow
-Each workflow defines a set of internal states that map to Linear states. States have types: `agent` (runs Claude Code), `gate` (waits for human review), or `terminal` (issue complete). Transitions between states are declared explicitly in config.
+Each workflow defines a set of internal states that map to Linear states. States have types: `agent` (runs Claude Code), `agent-gate` (one runner turn, then a machine-chosen transition from structured stdout), `gate` (waits for human review), or `terminal` (issue complete). Transitions between states are declared explicitly in config.
+
+**Agent-gate:** Same runner stack and `prompt:` as `agent`. YAML requires `transitions` (named keys → target states), plus `default_transition` naming one of those keys whose **target** must be `type: gate` (human validation when routing fails). After success, Stokowski parses `<<<STOKOWSKI_ROUTE>>>` / `{"transition":"<key>"}` / `<<<END_STOKOWSKI_ROUTE>>>` from the runner output and calls `_safe_transition` with that key; it posts `<stokowski:report>` like a normal agent state. If parsing fails, it posts a `route-error` comment and uses `default_transition`. See `prompts/lifecycle.md` and `workflow.example.yaml`.
 
 **Three-layer prompt assembly:** Every agent turn's prompt is built from three layers concatenated together:
 1. **Global prompt** — shared context loaded from a `.md` file (referenced by `prompts.global_prompt`)
@@ -116,16 +119,16 @@ Parses `workflow.yaml` (or legacy `.md` with front matter) into typed dataclasse
 - `ServerConfig` — optional web dashboard port
 - `LinearStatesConfig` — maps logical state names (`todo`, `active`, `review`, `gate_approved`, `rework`, `terminal`) to actual Linear state names. Issues in the `todo` state are picked up and automatically moved to `active` on dispatch.
 - `PromptsConfig` — global prompt file reference
-- `StateConfig` — a single state in the state machine: type, prompt path, linear_state key, runner, session mode, transitions, per-state overrides (model, max_turns, timeouts, hooks), gate-specific fields (rework_to, max_rework)
+- `StateConfig` — a single state in the state machine: type, prompt path, linear_state key, runner, session mode, transitions, optional `default_transition` for `agent-gate`, per-state overrides (model, max_turns, timeouts, hooks), gate-specific fields (rework_to, max_rework; forbidden on `agent-gate`)
 - `WorkflowConfig` — a complete workflow with label trigger, default flag, states dict, and prompts config
 
-`ServiceConfig` provides helper methods: `entry_state` (first agent state), `active_linear_states()`, `gate_linear_states()`, `terminal_linear_states()`, `get_workflow_for_issue(issue)` (routes by label), `entry_state_for_workflow(workflow)`.
+`ServiceConfig` provides helper methods: `entry_state` (first `agent` or `agent-gate` state), `active_linear_states()`, `gate_linear_states()`, `terminal_linear_states()`, `get_workflow_for_issue(issue)` (routes by label), `entry_state_for_workflow(workflow)`.
 
 `merge_state_config(state, root_claude, root_hooks)` merges per-state overrides with root defaults — only specified fields are overridden. Returns `(ClaudeConfig, HooksConfig)`.
 
 `parse_workflow_file()` detects format by file extension: `.yaml`/`.yml` files are parsed as pure YAML; `.md` files are split on `---` delimiters for front matter + body.
 
-`validate_config()` checks state machine integrity: all transitions point to existing states, gates have `rework_to` and `approve` transition, at least one agent and one terminal state exist, warns about unreachable states.
+`validate_config()` checks state machine integrity: all transitions point to existing states, gates have `rework_to` and `approve` transition, at least one `agent` or `agent-gate` state and one terminal state exist, `agent-gate` constraints (`default_transition`, fallback target is a gate, no `rework_to`/`max_rework`), warns about unreachable states.
 
 `ServiceConfig.resolved_api_key()` resolves the key in priority order:
 1. Literal value in YAML
