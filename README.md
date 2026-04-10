@@ -4,6 +4,8 @@
 
 **Autonomous coding agents, orchestrated by Linear issues.**
 
+*This project lives on GitHub at [**github.com/Sugar-Coffee/stokowski**](https://github.com/Sugar-Coffee/stokowski) — report issues, follow releases, and contribute there.*
+
 Built on [OpenAI's Symphony](https://github.com/openai/symphony) spec and taken further — with configurable state machines, gate-based human review, multi-runner support, and a live web dashboard. Works with [Claude Code](https://claude.ai/claude-code), [Codex](https://openai.com/index/introducing-codex/), [Mux](https://mux.coder.com), and [Linear](https://linear.app).
 
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
@@ -37,6 +39,9 @@ Built on [OpenAI's Symphony](https://github.com/openai/symphony) spec and taken 
   - [5. Configure your workflow](#5-configure-your-workflow)
   - [6. Validate](#6-validate)
   - [7. Run](#7-run)
+- [Multi-workflow](#multi-workflow)
+- [Agent-gate states (machine routing)](#agent-gate-states-machine-routing)
+- [Claude output logging (debug)](#claude-output-logging-debug)
 - [Configuration reference](#configuration-reference)
   - [Session modes: inherit vs fresh](#session-modes-inherit-vs-fresh)
 - [Prompt template variables](#prompt-template-variables)
@@ -151,6 +156,8 @@ Linear issue → isolated git clone → agent (Claude or Codex) → PR + Human R
 ## Features
 
 - **Configurable state machine** — define agent stages, human gates, and transitions in `workflow.yaml`; issues flow through your pipeline automatically
+- **Multi-workflow** — route issues to different state machines using Linear labels (`workflows:` in YAML); optional `default: true` fallback; backward-compatible single pipeline without `workflows:`
+- **Agent-gate** — after one agent turn, choose the next state automatically from structured output (`<<<STOKOWSKI_ROUTE>>>` JSON); safe fallback to a human gate and `route-error` comment on parse failure
 - **Multi-runner** — Claude Code and Codex in the same pipeline; different states can use different runners and models (e.g. Opus for investigation, Sonnet for implementation, Codex for review)
 - **Three-layer prompt assembly** — global prompt + per-stage prompt + auto-injected lifecycle context; each layer is a Jinja2 template with full issue variables
 - **Linear-driven dispatch** — polls for issues in configured states, dispatches agents with bounded concurrency
@@ -234,6 +241,14 @@ Prompt authors never need to write "move the issue to Human Review when done" �
 - **Process group tracking** — child PIDs registered on spawn and killed via `os.killpg`, catching grandchild processes too
 - **Interruptible poll sleep** — shutdown wakes the poll loop immediately; doesn't wait for the current interval to expire
 - **Headless system prompt** — agents receive an appended system prompt disabling interactive skills, plan mode, and slash commands
+
+</details>
+
+<details>
+<summary><strong>Multi-workflow and agent-gate</strong></summary>
+
+- **Multi-workflow** — `workflows:` maps Linear labels to separate `states` + `prompts`; first label match wins; `default: true` fallback; omit `workflows:` for a single implicit pipeline from root `states`
+- **Agent-gate** — `type: agent-gate` runs one agent turn then chooses `transitions` from `<<<STOKOWSKI_ROUTE>>>` JSON; `default_transition` must point to a key whose target is a `gate`; failures post `route-error` and use that fallback
 
 </details>
 
@@ -486,6 +501,100 @@ Open `http://localhost:4200` for the live dashboard.
 
 ---
 
+## Multi-workflow
+
+When your team uses **different pipelines** for different kinds of work (bugs vs features, hotfixes vs large projects), you can define multiple **named workflows** under a top-level `workflows:` key in `workflow.yaml`.
+
+**How routing works**
+
+1. Each workflow has a **`label`** — the exact name of a Linear label on the issue (case-sensitive string match).
+2. Stokowski walks `workflows:` **in YAML order** and picks the **first** workflow whose `label` appears on the issue.
+3. If **no** label matches, the workflow marked **`default: true`** is used (if present).
+4. If nothing matches and there is **no** default, dispatch **fails** with a clear configuration error.
+
+**Per-workflow settings**
+
+Each workflow typically defines its own `states`, `prompts` (`global_prompt`, `lifecycle_prompt`), and may override **`max_concurrent_agents`** and **`max_concurrent_agents_by_state`**. Linear state mapping (`linear_states`), `tracker`, `workspace`, root `hooks`, and root `claude` defaults are usually **shared** at the top level of the file.
+
+**Backward compatibility**
+
+If `workflows:` is **omitted**, Stokowski builds a single implicit **default** workflow from the root `states:` and `prompts:` sections. Existing single-pipeline configs keep working unchanged.
+
+**Example** (see also `workflow.example.yaml`):
+
+```yaml
+workflows:
+  debug:
+    label: debug
+    prompts:
+      global_prompt: prompts/debug/global.md
+      lifecycle_prompt: prompts/lifecycle.md
+    states: { ... }
+
+  feature:
+    label: feature
+    default: true
+    prompts:
+      global_prompt: prompts/feature/global.md
+      lifecycle_prompt: prompts/lifecycle.md
+    states: { ... }
+```
+
+---
+
+## Agent-gate states (machine routing)
+
+An **`agent-gate`** state is like an **`agent`** state (same runner, one turn, same prompts), but when the turn **succeeds**, Stokowski **does not** always follow a fixed `complete` transition. Instead it reads a **routing decision** from the model output and calls the matching transition key.
+
+**When to use it**
+
+- Branch after automated review: e.g. “has findings” → fix loop, “clean” → human merge gate.
+- Any step where **one** agent turn should **classify** the outcome and pick the next machine state without a human changing Linear first.
+
+**YAML requirements**
+
+| Field | Meaning |
+|-------|---------|
+| `type: agent-gate` | Enables routing behaviour |
+| `transitions` | Map of **logical keys** → **target state names** (must exist in the same workflow) |
+| `default_transition` | One of those keys; its **target state must be `type: gate`** — used when the block is missing, JSON is invalid, or the key is unknown |
+
+Forbidden on `agent-gate` (same as gates): `rework_to`, `max_rework` — human rework is expressed via the gate you route into.
+
+**What the model must output**
+
+1. A normal **`<stokowski:report>...</stokowski:report>`** block (same as other agent states).
+2. A **routing envelope** with valid JSON on its own lines between the markers:
+
+```
+<<<STOKOWSKI_ROUTE>>>
+{"transition": "your_key_here"}
+<<<END_STOKOWSKI_ROUTE>>>
+```
+
+Use a **`transition`** value that exactly matches a key under `transitions:` in config (e.g. `clean`, `has_findings`, `needs_human`).
+
+**Parsing and Claude stream-json**
+
+Claude Code emits **NDJSON**: each line is a JSON object; user-visible text lives inside string fields (`assistant` message `text`, `result`). Stokowski **decodes** those fields first, then parses the routing block, so the JSON between markers is real JSON (not JSON-escaped wire text). Plain-text harnesses and tests that pass a single string still work.
+
+**On failure**
+
+- Stokowski posts a **`route-error`** comment (with encoded detail) and applies **`default_transition`** (the gate you configured for human follow-up).
+- Fix prompts so the model always emits both the report and a non-empty JSON line between the markers; see `prompts/lifecycle.md` (`is_agent_gate`) and `prompts/feature/review-findings-route.md` for examples.
+
+---
+
+## Claude output logging (debug)
+
+**`--log-agent-output [DIR]`** (optional directory; default `./.stokowski/agent-output` if omitted) writes **one timestamped `.log` file per Claude runner turn** with the captured stdout (NDJSON lines). **Claude runner only** — Mux and Codex are unaffected.
+
+Use **`stokowski -v --log-agent-output`** for a **DEBUG** preview (first 4000 characters) in the console. Helpful when debugging agent-gate routing, report extraction, or stream-json shape.
+
+The startup panel states explicitly that this applies only to the **Claude** runner.
+
+---
+
 ## Configuration reference
 
 <details>
@@ -623,8 +732,24 @@ states:                                # the state machine pipeline
 | Type | Has prompt | What Stokowski does |
 |------|-----------|---------------------|
 | `agent` (default) | Yes | Dispatches a runner (Claude Code or Codex), runs turns, follows `transitions.complete` on success |
+| `agent-gate` | Yes | One runner turn like `agent`; on success parses `<<<STOKOWSKI_ROUTE>>>` … `<<<END_STOKOWSKI_ROUTE>>>` JSON and follows the matching `transitions` key, or `default_transition` on failure (see [Agent-gate states](#agent-gate-states-machine-routing)) |
 | `gate` | No | Moves issue to review Linear state, waits for human. Follows `transitions.approve` on Gate Approved, `rework_to` on Rework |
 | `terminal` | No | Moves issue to terminal Linear state, deletes workspace |
+
+### Multi-workflow layout (`workflows:`)
+
+When using multiple pipelines, define **`workflows:`** as a mapping of workflow names to objects that include at least:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `label` | Yes (unless only `default: true`) | Linear label string; first match in file order wins |
+| `default` | No | If `true`, used when no `label` matches |
+| `states` | Yes | Same shape as root `states` in a single-workflow file |
+| `prompts` | Yes | `global_prompt` (optional), `lifecycle_prompt` (required) |
+| `max_concurrent_agents` | No | Override global concurrency for this workflow |
+| `max_concurrent_agents_by_state` | No | Per-state caps within this workflow |
+
+Root-level `tracker`, `linear_states`, `polling`, `workspace`, `hooks`, `claude`, `agent`, and `server` apply to all workflows unless you add workflow-specific overrides in future config versions (today: shared root + per-workflow `states`/`prompts`).
 
 ### Per-state runner config
 
@@ -724,6 +849,8 @@ The lifecycle section is appended automatically — you don't need to include it
 | `{{ transitions }}` | Dictionary mapping trigger names to target state names |
 | `{{ has_gate_transition }}` | `true` if any transition leads to a gate state |
 | `{{ gate_targets }}` | List of `(trigger, target)` tuples for gate transitions |
+| `{{ is_agent_gate }}` | `true` when the current state is `type: agent-gate` — show routing marker instructions |
+| `{{ agent_gate_default_transition }}` | Name of `default_transition` for agent-gate states (empty string otherwise) |
 
 Use these to customize the lifecycle injection section that appears at the end of every agent prompt. See `prompts/lifecycle.md` for an example template.
 
@@ -871,6 +998,7 @@ prompts/       →  Jinja2 stage prompt files
 | `stokowski/config.py` | `workflow.yaml` parser, typed config dataclasses, state machine validation |
 | `stokowski/prompt.py` | Three-layer prompt assembly (global + stage + lifecycle) |
 | `stokowski/tracking.py` | State machine tracking via structured Linear comments |
+| `stokowski/agent_gate_route.py` | Parse agent-gate `<<<STOKOWSKI_ROUTE>>>` from decoded stream-json + `route-error` comments |
 | `stokowski/linear.py` | Linear GraphQL client (httpx async) |
 | `stokowski/models.py` | Domain models: `Issue`, `RunAttempt`, `RetryEntry` |
 | `stokowski/orchestrator.py` | Poll loop, state machine dispatch, reconciliation, retry |
@@ -945,6 +1073,7 @@ git diff HEAD@{1} workflow.example.yaml
 
 ## Credits
 
+- [**Sugar-Coffee/stokowski**](https://github.com/Sugar-Coffee/stokowski) — canonical repository and home for this project on GitHub
 - [OpenAI Symphony](https://github.com/openai/symphony) — the spec and architecture Stokowski implements
 - [Anthropic Claude Code](https://claude.ai/claude-code) — agent runtime
 - [OpenAI Codex](https://openai.com/index/introducing-codex/) — agent runtime

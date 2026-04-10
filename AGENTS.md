@@ -17,11 +17,13 @@ This skill determines HOW to approach every task and ensures you:
 
 # Project Overview
 
-**Stokowski** is a Python daemon that orchestrates autonomous coding agents (Claude Code, Codex) driven by Linear issues. It implements a configurable state machine workflow with human review gates, allowing issues to flow through multiple stages (investigate → implement → review → merge) with optional human approval at each gate.
+**Stokowski** is a Python daemon that orchestrates autonomous coding agents (Claude Code, Codex, Mux) driven by Linear issues. It implements a configurable state machine with **optional multi-workflow routing** (Linear labels), **human review gates**, and **`agent-gate`** states for machine-chosen transitions after one agent turn.
 
 ## Goals
 
 - Enable unattended agent execution for Linear issues through configurable state machines
+- Support **multiple workflows** in one config (`workflows:` + label / default routing)
+- Support **agent-gate** machine routing from structured output, with safe fallback to a human gate
 - Provide clean separation between interactive Claude Code usage and autonomous agent workflows
 - Support human-in-the-loop review gates with approve/rework transitions
 - Offer real-time monitoring via terminal UI and optional web dashboard
@@ -34,7 +36,7 @@ This skill determines HOW to approach every task and ensures you:
 - **CLI UI**: rich (terminal dashboard)
 - **Templating**: jinja2 (for prompt assembly)
 - **Web Dashboard**: FastAPI + uvicorn (optional)
-- **External Dependencies**: Claude Code CLI or Codex CLI
+- **External Dependencies**: Claude Code CLI, Codex CLI, or Mux (`runner: mux` per state)
 
 # Reference
 
@@ -49,6 +51,7 @@ This skill determines HOW to approach every task and ensures you:
 | `stokowski/runner.py` | Claude Code CLI integration, NDJSON stream parser |
 | `stokowski/prompt.py` | Three-layer prompt assembly (global + stage + lifecycle) |
 | `stokowski/tracking.py` | State machine tracking via structured Linear comments |
+| `stokowski/agent_gate_route.py` | Agent-gate: decode Claude NDJSON text, parse `<<<STOKOWSKI_ROUTE>>>`, `format_route_error_comment` |
 | `stokowski/workspace.py` | Per-issue workspace lifecycle and hooks |
 | `stokowski/web.py` | Optional FastAPI dashboard |
 | `stokowski/models.py` | Domain models: Issue, RunAttempt, RetryEntry |
@@ -96,12 +99,17 @@ stokowski -v
 
 # Run with web dashboard
 stokowski --port 4200
+
+# Log each Claude turn's raw stdout (NDJSON) to timestamped files — Claude runner only
+stokowski --log-agent-output
+stokowski -v --log-agent-output /path/to/logs
 ```
 
 ## Project Maintenance
 
 ```bash
-# No test suite - validate via dry-run against real Linear project
+# Run tests (use test extra: uv sync --extra test)
+uv run pytest tests/ -v
 
 # Install with web dependencies
 pip install -e ".[web]"
@@ -121,11 +129,18 @@ find . -type d -name __pycache__ -exec rm -rf {} +
 
 ## State Machine Configuration
 
-Workflows are defined in `workflow.yaml` (not in this repo - operator creates it):
+Workflows are defined in `workflow.yaml` (not in this repo — operator creates it):
 
-- **agent states**: Run Claude Code with configured prompt
-- **gate states**: Pause for human review via Linear state changes
+- **agent states**: Run the configured runner (`claude`, `codex`, or `mux`) with the stage prompt; on success follow `transitions.complete`
+- **agent-gate states**: Same runner stack as `agent` for **one** turn; on success parse `<<<STOKOWSKI_ROUTE>>>` … `<<<END_STOKOWSKI_ROUTE>>>` for `{"transition":"<key>"}` and follow `transitions[key]`. Requires `default_transition` pointing to a key whose **target** is `type: gate`. On parse failure, post `route-error` and use `default_transition`. Implementation: `agent_gate_route.py` — routing text is taken from **decoded** `assistant` / `result` fields in stream-json, not from raw NDJSON substrings.
+- **gate states**: Pause for human review via Linear state changes (`approve` / `rework_to`)
 - **terminal states**: Issue complete, workspace cleaned up
+
+## Multi-workflow configuration
+
+When `workflows:` is present, each entry is a named workflow with `label` (Linear label, exact match), optional `default: true`, and its own `states` + `prompts`. **First matching label in YAML order wins**; if none match, the default workflow is used; if there is no default, dispatch fails. Without `workflows:`, root `states` + `prompts` form a single implicit default workflow (backward compatible).
+
+Orchestrator resolves `WorkflowConfig` per issue via `ServiceConfig.get_workflow_for_issue()` (see `config.py`).
 
 ## Three-Layer Prompt Assembly
 
@@ -145,9 +160,12 @@ Configure in `workflow.yaml`:
 
 ## Crash Recovery
 
-State is recovered by parsing structured HTML comments on Linear issues:
-- `<!-- stokowski-state:{...} -->` — State entry tracking
-- `<!-- stokowski-gate:{...} -->` — Gate status tracking
+State is recovered by parsing structured HTML comments on Linear issues (see `tracking.py`):
+
+- `<!-- stokowski:state {...} -->` — State entry tracking
+- `<!-- stokowski:gate {...} -->` — Gate status tracking
+
+Agent-gate routing failures also post `<!-- stokowski:route-error b64:... -->` (human-readable body + base64 JSON payload).
 
 # Anti-Patterns
 
