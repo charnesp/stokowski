@@ -22,6 +22,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <title>Stokowski</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script>
+  (function() {
+    var theme = localStorage.getItem('stokowski-theme');
+    if (!theme) {
+      theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+    document.documentElement.setAttribute('data-theme', theme);
+  })();
+</script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -41,6 +50,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     --font:      'IBM Plex Mono', monospace;
   }
 
+  [data-theme="light"] {
+    --bg:        #f5f5f5;
+    --surface:   #ffffff;
+    --border:    #e0e0e0;
+    --border-hi: #d0d0d0;
+    --text:      #1a1a1a;
+    --muted:     #666666;
+    --dim:       #999999;
+    --amber:     #c99a2e;
+    --amber-dim: #a07820;
+    --green:     #3a9a5e;
+    --red:       #c44a42;
+    --blue:      #4580d4;
+  }
+
   html, body {
     background: var(--bg);
     color: var(--text);
@@ -49,6 +73,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     line-height: 1.5;
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
+  }
+
+  html, body, .metric, .agent-card, .empty, .status-pill, .progress-wrap, footer {
+    transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
   }
 
   /* Subtle grid background */
@@ -63,6 +91,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     opacity: 0.35;
     pointer-events: none;
     z-index: 0;
+    transition: opacity 0.25s ease;
+  }
+
+  [data-theme="light"] body::before,
+  body[data-theme="light"]::before {
+    opacity: 0.2;
   }
 
   .shell {
@@ -135,6 +169,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     color: var(--muted);
     font-weight: 300;
     letter-spacing: 0.04em;
+  }
+
+  /* ── Theme toggle ── */
+  .theme-toggle {
+    background: none;
+    border: 1px solid var(--border-hi);
+    color: var(--muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 3px;
+    font-size: 14px;
+    line-height: 1;
+    transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+  }
+
+  .theme-toggle:hover {
+    background: var(--border);
+    color: var(--text);
+  }
+
+  .theme-toggle:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
   }
 
   /* ── Metrics row ── */
@@ -245,7 +302,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
 
   .agent-card:hover {
-    background: #141414;
+    background: var(--border);
   }
 
   .agent-id {
@@ -434,6 +491,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <span class="logo-tag">Claude Code Orchestrator</span>
     </div>
     <div class="header-right">
+      <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme" title="Toggle theme">&#9790;</button>
       <div id="status-dot" class="status-dot idle"></div>
       <span id="ts" class="timestamp">—</span>
     </div>
@@ -625,6 +683,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   refresh();
   setInterval(refresh, 3000);
+
+  // ── Theme toggle ──
+  var themeBtn = document.getElementById('theme-toggle');
+  var sunIcon = '\u2600';   // ☀
+  var moonIcon = '\u263E';  // ☾
+
+  function updateToggleIcon() {
+    var current = document.documentElement.getAttribute('data-theme') || 'dark';
+    themeBtn.innerHTML = current === 'light' ? moonIcon : sunIcon;
+  }
+
+  themeBtn.addEventListener('click', function() {
+    var current = document.documentElement.getAttribute('data-theme') || 'dark';
+    var next = current === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('stokowski-theme', next);
+    updateToggleIcon();
+  });
+
+  updateToggleIcon();
 </script>
 </body>
 </html>
