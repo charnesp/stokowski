@@ -358,10 +358,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     font-size: 12px;
     color: var(--muted);
     font-weight: 300;
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
     overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 620px;
   }
 
   .agent-meta {

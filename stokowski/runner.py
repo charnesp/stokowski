@@ -318,7 +318,7 @@ async def run_codex_turn(
             line_str = line.decode().strip()
             if line_str:
                 output_lines.append(line_str)
-                attempt.last_message = line_str[:200]
+                attempt.last_message = line_str[:600]
         return output_lines
 
     async def stall_monitor():
@@ -622,18 +622,18 @@ def _process_event(
         # Extract result text for last_message
         result_text = event.get("result", "")
         if isinstance(result_text, str) and result_text:
-            attempt.last_message = result_text[:200]
+            attempt.last_message = result_text[:600]
 
     elif event_type == "assistant":
         # Assistant message content
         msg = event.get("message", {})
         content = msg.get("content", "")
         if isinstance(content, str) and content:
-            attempt.last_message = content[:200]
+            attempt.last_message = content[:600]
         elif isinstance(content, list):
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    attempt.last_message = block.get("text", "")[:200]
+                    attempt.last_message = block.get("text", "")[:600]
                     break
 
     elif event_type == "tool_use":
@@ -770,7 +770,7 @@ async def run_mux_turn(
                 if debug_file:
                     debug_file.write(line_str + "\n")
                     debug_file.flush()
-                attempt.last_message = line_str[:200]
+                attempt.last_message = line_str[:600]
 
             # Parse as JSON and extract assistant messages
             try:
