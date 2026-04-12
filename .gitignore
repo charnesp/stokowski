@@ -14,6 +14,7 @@ docs/plans/
 # Workflow config (operator-local)
 workflow.yaml
 workflow.yml
+!.stokowski/workflow.yaml
 
 # Prompt files (operator-local, examples are tracked)
 prompts/*.md
