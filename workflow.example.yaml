@@ -38,6 +38,7 @@
 tracker:
   kind: linear
   project_slug: "abc123def456"    # hex slugId from your Linear project URL
+                                  # can also be set via LINEAR_PROJECT_SLUG env var
 
 
 # -----------------------------------------------------------------------------

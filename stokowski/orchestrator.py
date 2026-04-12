@@ -134,7 +134,7 @@ class Orchestrator:
 
         logger.info(
             f"Starting Stokowski "
-            f"project={self.cfg.tracker.project_slug} "
+            f"project={self.cfg.resolved_project_slug()} "
             f"max_agents={self.cfg.agent.max_concurrent_agents} "
             f"poll_ms={self.cfg.polling.interval_ms}"
         )
@@ -193,7 +193,7 @@ class Orchestrator:
         try:
             client = self._ensure_linear_client()
             terminal = await client.fetch_issues_by_states(
-                self.cfg.tracker.project_slug,
+                self.cfg.resolved_project_slug(),
                 self.cfg.terminal_linear_states(),
             )
             ws_root = self.cfg.workspace.resolved_root()
@@ -724,7 +724,7 @@ class Orchestrator:
         # Fetch gate-approved issues
         try:
             approved_issues = await client.fetch_issues_by_states(
-                self.cfg.tracker.project_slug,
+                self.cfg.resolved_project_slug(),
                 [self.cfg.linear_states.gate_approved],
             )
         except Exception as e:
@@ -818,7 +818,7 @@ class Orchestrator:
         # Fetch rework issues
         try:
             rework_issues = await client.fetch_issues_by_states(
-                self.cfg.tracker.project_slug,
+                self.cfg.resolved_project_slug(),
                 [self.cfg.linear_states.rework],
             )
         except Exception as e:
@@ -951,7 +951,7 @@ class Orchestrator:
         try:
             client = self._ensure_linear_client()
             candidates = await client.fetch_candidate_issues(
-                self.cfg.tracker.project_slug,
+                self.cfg.resolved_project_slug(),
                 self.cfg.active_linear_states(),
             )
         except Exception as e:
@@ -1727,7 +1727,7 @@ class Orchestrator:
         try:
             client = self._ensure_linear_client()
             candidates = await client.fetch_candidate_issues(
-                self.cfg.tracker.project_slug,
+                self.cfg.resolved_project_slug(),
                 self.cfg.active_linear_states(),
             )
         except Exception as e:

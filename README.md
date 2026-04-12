@@ -443,6 +443,8 @@ https://linear.app/your-team/project/my-project-abc123def456
                                               this part, not the name
 ```
 
+You can also set `LINEAR_PROJECT_SLUG` in your `.env` file instead of `workflow.yaml` — the YAML value takes precedence if both are set.
+
 **`hooks.after_create`** — how to clone your repo into a fresh workspace:
 
 ```yaml
@@ -472,7 +474,7 @@ This connects to Linear, validates your config, and lists candidate issues — *
 | Error | Fix |
 |-------|-----|
 | `Missing tracker API key` | Set `LINEAR_API_KEY` in your `.env` file |
-| `Missing tracker.project_slug` | Set `project_slug` in `workflow.yaml` |
+| `Missing tracker.project_slug` | Set `project_slug` in `workflow.yaml` or `LINEAR_PROJECT_SLUG` in `.env` |
 | `Failed to fetch candidates` | Check your API key has access to the project |
 | No issues listed | Check `linear_states` matches your Linear state names exactly |
 
@@ -604,6 +606,7 @@ The startup panel states explicitly that this applies only to the **Claude** run
 tracker:
   kind: linear                          # only "linear" supported
   project_slug: "abc123def456"          # hex slugId from your Linear project URL
+  # project_slug can also be set via LINEAR_PROJECT_SLUG env var
   # api_key: omit this — set LINEAR_API_KEY in your .env file instead
 
 # These map Stokowski's internal lifecycle roles to your Linear state names.

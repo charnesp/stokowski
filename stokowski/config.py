@@ -170,6 +170,19 @@ class ServiceConfig:
             return os.environ.get("LINEAR_API_KEY", "")
         return _resolve_env(key)
 
+    def resolved_project_slug(self) -> str:
+        """Resolve project slug with env-var fallback.
+
+        Priority: literal YAML value → $VAR reference → LINEAR_PROJECT_SLUG env var.
+        """
+        slug = self.tracker.project_slug
+        if not slug:
+            return os.environ.get("LINEAR_PROJECT_SLUG", "")
+        resolved = _resolve_env(slug)
+        if resolved:
+            return resolved
+        return os.environ.get("LINEAR_PROJECT_SLUG", "")
+
     def agent_env(self) -> dict[str, str]:
         """Build env vars to pass to agent subprocesses.
 
@@ -181,7 +194,7 @@ class ServiceConfig:
         if api_key:
             env["LINEAR_API_KEY"] = api_key
         # Resolve project_slug and endpoint if they contain $VAR references
-        project_slug = _resolve_env(self.tracker.project_slug)
+        project_slug = self.resolved_project_slug()
         if project_slug:
             env["LINEAR_PROJECT_SLUG"] = project_slug
         endpoint = _resolve_env(self.tracker.endpoint)
@@ -608,8 +621,10 @@ def validate_config(cfg: ServiceConfig, skip_secrets_check: bool = False) -> lis
         errors.append(f"Unsupported tracker kind: {cfg.tracker.kind}")
     if not skip_secrets_check and not cfg.resolved_api_key():
         errors.append("Missing tracker API key (set LINEAR_API_KEY or tracker.api_key)")
-    if not cfg.tracker.project_slug:
-        errors.append("Missing tracker.project_slug")
+    if not cfg.resolved_project_slug():
+        errors.append(
+            "Missing tracker.project_slug (set LINEAR_PROJECT_SLUG or tracker.project_slug)"
+        )
 
     # In legacy mode, root states must be defined
     # In multi-workflow mode, workflows must have states (validated per workflow below)

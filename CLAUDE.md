@@ -135,6 +135,11 @@ Parses `workflow.yaml` (or legacy `.md` with front matter) into typed dataclasse
 2. `$VAR` reference resolved from env
 3. `LINEAR_API_KEY` env var as fallback
 
+`ServiceConfig.resolved_project_slug()` follows the same three-tier pattern:
+1. Literal value in YAML
+2. `$VAR` reference resolved from env
+3. `LINEAR_PROJECT_SLUG` env var as fallback
+
 ### linear.py
 Async GraphQL client over httpx. Three queries:
 - `fetch_candidate_issues()` — paginated, fetches all issues in active states with full detail (labels, blockers, branch name)

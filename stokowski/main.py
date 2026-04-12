@@ -447,7 +447,7 @@ async def dry_run(workflow_path: str):
     cfg = workflow.config
     console.print("[green]Config valid[/green]")
     console.print(f"  Tracker: {cfg.tracker.kind}")
-    console.print(f"  Project: {cfg.tracker.project_slug}")
+    console.print(f"  Project: {cfg.resolved_project_slug()}")
     console.print(f"  Max agents: {cfg.agent.max_concurrent_agents}")
     console.print(f"  Claude model: {cfg.claude.model or 'default'}")
     console.print(f"  Permission mode: {cfg.claude.permission_mode}")
@@ -476,7 +476,7 @@ async def dry_run(workflow_path: str):
 
     try:
         candidates = await client.fetch_candidate_issues(
-            cfg.tracker.project_slug,
+            cfg.resolved_project_slug(),
             cfg.active_linear_states(),
         )
     except Exception as e:
