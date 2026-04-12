@@ -4,7 +4,7 @@ Your task is to implement the approved design in the workspace **up to the imple
 
 ## OpenSpec (required)
 
-Follow the **`openspec-apply-change`** skill (**`/openspec-apply-change`**). Do not re-document that workflow here — use it to select the change, follow apply instructions, and complete `tasks.md` as the skill defines. If scope shifts, update the change artifacts before coding. **Do not** run **`openspec-archive-change`** from this stage; it runs in the **merge** state after the PR is merged (see `merge.md`).
+Follow the **`openspec-apply-change`** skill (**`/openspec-apply-change`**). Do not re-document that workflow here — use it to select the change, follow apply instructions, and complete `tasks.md` as the skill defines. If scope shifts, update the change artifacts before coding. **Do not** run **`openspec-archive-change`** from this stage; it runs in the **merge** state **before** the PR is merged (see `merge.md`).
 
 ## Strict TDD (required)
 
@@ -58,15 +58,22 @@ Run tests frequently: `uv run pytest tests/ -v`. You may use local `git commit` 
 - Keep inline comments minimal but meaningful
 - Ensure error messages are actionable for operators
 
+## Pre-commit (mandatory — full hook suite)
+
+Before marking this stage complete, you **must** run the **entire** project pre-commit suite — not only pytest. That is the operator’s definition of “green”:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+This runs tests, Ruff, Pyright, Bandit, pip-audit, and the other hooks configured for the repo. **Do not** skip hooks (`SKIP=…`), use `--no-verify` on commit, or claim done after only `pytest` / `ruff` / `pyright` alone. If a hook fails, fix the underlying issue and re-run until **all** hooks pass.
+
 ## Quality checklist
 
 Before marking complete, verify:
 
 - [ ] Implementation matches the approved design
-- [ ] All tests pass (`uv run pytest`)
-- [ ] No new lint errors (`uv run ruff check`)
-- [ ] Type checking passes (`uv run pyright`)
-- [ ] Security scan clean (`uv run bandit -r stokowski/`)
+- [ ] **`uv run pre-commit run --all-files` exits 0** (full hook suite)
 - [ ] Local branch follows naming convention: `feature/description` or `fix/description` (for when the PR is opened later)
 - [ ] Commit messages are clear and descriptive (local commits only)
 
@@ -82,7 +89,7 @@ Before marking complete, verify:
 Mark this task complete when:
 
 1. All acceptance criteria from the design are implemented
-2. Tests are written and passing
+2. Tests are written and passing **and** `uv run pre-commit run --all-files` passes
 3. Changes are committed **locally** on the feature branch (ready for later push when merge-review prep runs)
 4. No critical security or performance concerns remain
 
@@ -94,7 +101,7 @@ If this is a rework run after **implementation-review** requested changes:
 
 1. Read the review feedback in Linear (and in your `<stokowski:report>` / issue thread context).
 2. Address each point specifically on the existing local feature branch.
-3. Run the full quality suite again.
+3. Run **`uv run pre-commit run --all-files`** again and fix until all hooks pass.
 4. Add new local commits (do not force-push). Implementation rework stays local until **`review-findings-route`** opens the PR for merge-review.
 
 ## Do NOT
@@ -102,5 +109,5 @@ If this is a rework run after **implementation-review** requested changes:
 - Create a new branch if one already exists for this issue
 - Push to origin or open a PR/MR from this stage
 - Force-push (use normal commits)
-- Skip the quality suite (tests, lint, type-check)
+- Skip or bypass pre-commit (`SKIP=…`, `git commit --no-verify`, or stopping after pytest/ruff/pyright only instead of **`uv run pre-commit run --all-files`**)
 - Merge

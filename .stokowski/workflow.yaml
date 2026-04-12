@@ -1,0 +1,268 @@
+# =============================================================================
+# Stokowski Test Workflow - Mux Runner Validation
+# =============================================================================
+# Ce fichier est destiné à tester l'intégration du runner Mux avec Linear.
+#
+# PRÉREQUIS:
+# Créez un fichier .env à la racine avec:
+#   LINEAR_API_KEY="votre_clé_api_linear"
+#   ANTHROPIC_AUTH_TOKEN="votre_token_anthropic" (si utilisé)
+#   ANTHROPIC_BASE_URL="https://api.anthropic.com" (optionnel)
+#
+# INSTRUCTIONS:
+# 1. Copiez ce fichier vers workflow.yaml
+# 2. Remplacez PROJECT_SLUG par votre slug Linear (visible dans l'URL)
+# 3. Créez un ticket test dans Linear avec l'état "Todo"
+# 4. Lancez: stokowski --dry-run
+# 5. Lancez: stokowski
+#
+# Ce workflow utilise Mux comme runner pour l'état "implement"
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Tracker
+# ---------------------------------------------------------------------------
+tracker:
+  kind: linear
+  project_slug: "symphony-test-ebb8e8da5db2"  # Remplacez par votre slug Linear
+  # api_key: Définie dans le fichier .env via LINEAR_API_KEY
+
+# ---------------------------------------------------------------------------
+# Linear state name mapping
+# ---------------------------------------------------------------------------
+linear_states:
+  todo: "Todo"                        # issues picked up from this state
+  active: "In Progress"               # moved here automatically when agent starts
+  review: "Human Review"              # agent pauses here at a gate for human review
+  gate_approved: "Gate Approved"      # human approved — agent advances to next state
+  rework: "Rework"                    # human requested changes — agent re-enters rework target
+  terminal:                           # issues in these states stop any running agent
+    - Done
+    - Closed
+    - Cancelled
+    - Canceled
+    - Duplicate
+
+# ---------------------------------------------------------------------------
+# Polling
+# ---------------------------------------------------------------------------
+polling:
+  interval_ms: 15000  # 15 secondes pour les tests
+
+# ---------------------------------------------------------------------------
+# Workspace
+# ---------------------------------------------------------------------------
+workspace:
+  root: ~/stokowski-workspaces
+
+# ---------------------------------------------------------------------------
+# Hooks
+# ---------------------------------------------------------------------------
+hooks:
+  after_create: |
+    git clone --depth 1 https://github.com/charnesp/stokowski.git .
+    echo "Workspace created for test issue"
+  before_run: |
+    git fetch origin main || exit 1
+    if [ -z "$(git status --porcelain)" ]; then
+      git merge --ff-only origin/main || exit 1
+    fi
+  timeout_ms: 60000
+
+# -----------------------------------------------------------------------------
+# Agent concurrency
+# -----------------------------------------------------------------------------
+agent:
+  max_concurrent_agents: 4
+  max_retry_backoff_ms: 300000    # 5-minute cap on exponential backoff
+
+# -----------------------------------------------------------------------------
+# Server (optional web dashboard)
+# -----------------------------------------------------------------------------
+server:
+  port: 4200
+
+# ---------------------------------------------------------------------------
+# Claude defaults (reused by Mux runner)
+# ---------------------------------------------------------------------------
+claude:
+  permission_mode: auto
+  model: kimi-k2.5:cloud
+  max_turns: 5  # Limité pour les tests
+  turn_timeout_ms: 600000       # 10 minutes
+  stall_timeout_ms: 120000      # 2 minutes
+
+
+workflows:
+
+  # ── Workflow: debug ───────────────────────────────────────────────────────
+  # Triggered by the "debug" label on Linear issues.
+  # Lightweight workflow for bug investigation and quick fixes.
+  # ──────────────────────────────────────────────────────────────────────────
+  debug:
+    label: debug
+
+    prompts:
+      global_prompt: prompts/debug/global.md
+      lifecycle_prompt: prompts/lifecycle.md
+
+    # Per-workflow concurrency limits (optional, overrides global agent:)
+    max_concurrent_agents: 2
+    max_concurrent_agents_by_state:
+      investigate: 2
+      fix: 1
+
+    states:
+      # Entry state (first agent state)
+      investigate:
+        type: agent
+        prompt: prompts/debug/investigate.md
+        linear_state: active
+        model: kimi-k2.5:cloud
+        max_turns: 8
+        session: inherit
+        transitions:
+          complete: fix-review
+
+      fix-review:
+        type: gate
+        linear_state: review
+        rework_to: investigate
+        max_rework: 2
+        transitions:
+          approve: fix
+
+      fix:
+        type: agent
+        prompt: prompts/debug/fix.md
+        linear_state: active
+        model: kimi-k2.5:cloud
+        max_turns: 15
+        session: inherit
+        transitions:
+          complete: pr-review
+
+      pr-review:
+        type: gate
+        linear_state: review
+        rework_to: fix
+        max_rework: 3
+        transitions:
+          approve: done
+
+      done:
+        type: terminal
+        linear_state: terminal
+
+  # ── Workflow: feature ───────────────────────────────────────────────────
+  # Triggered by the "feature" label on Linear issues.
+  # Full workflow for feature development with multiple review gates.
+  # Marked as default — used for issues without matching labels.
+  # ──────────────────────────────────────────────────────────────────────────
+  feature:
+    label: feature
+    default: true                 # Fallback for issues without matching labels
+
+    prompts:
+      global_prompt: prompts/feature/global.md
+      lifecycle_prompt: prompts/lifecycle.md
+
+    # Per-workflow concurrency limits
+    max_concurrent_agents: 4
+    max_concurrent_agents_by_state:
+      investigate: 2
+      implement: 2
+      code-review: 1              # Serial reviews prevent merge conflicts
+      correct-findings-code-review: 2
+
+    states:
+      # Entry state (first agent state)
+      investigate:
+        type: agent
+        prompt: prompts/feature/investigate.md
+        linear_state: active
+        model: glm-5.1:cloud
+        max_turns: 8
+        session: inherit
+        transitions:
+          complete: research-review
+
+      research-review:
+        type: gate
+        linear_state: review
+        rework_to: investigate
+        max_rework: 8
+        transitions:
+          approve: implement
+
+      implement:
+        type: agent
+        prompt: prompts/feature/implement.md
+        linear_state: active
+        model: glm-5.1:cloud
+        max_turns: 30
+        session: fresh
+        transitions:
+          complete: implementation-review
+
+      implementation-review:
+        type: gate
+        linear_state: review
+        rework_to: implement
+        max_rework: 5
+        transitions:
+          approve: code-review
+
+      code-review:
+        type: agent
+        prompt: prompts/feature/review.md
+        linear_state: active
+        runner: claude
+        model: kimi-k2.5:cloud
+        max_turns: 10
+        session: fresh              # Fresh session for adversarial review
+        transitions:
+          complete: review-findings-route
+
+      # After automated code review: machine routing — findings → fix pass → code-review again;
+      # clean → human merge gate. On invalid routing output, default sends to merge-review.
+      review-findings-route:
+        type: agent-gate
+        prompt: prompts/feature/review-findings-route.md
+        linear_state: active
+        default_transition: needs_human
+        transitions:
+          has_findings: correct-findings-code-review
+          clean: merge-review
+          needs_human: merge-review
+
+      correct-findings-code-review:
+        type: agent
+        prompt: prompts/feature/correct-findings-code-review.md
+        linear_state: active
+        model: kimi-k2.5:cloud
+        max_turns: 15
+        session: inherit
+        transitions:
+          complete: code-review
+
+      merge-review:
+        type: gate
+        linear_state: review
+        rework_to: implement
+        max_rework: 5
+        transitions:
+          approve: merge
+
+      merge:
+        type: agent
+        prompt: prompts/feature/merge.md
+        linear_state: active
+        max_turns: 5
+        session: inherit
+        transitions:
+          complete: done
+
+      done:
+        type: terminal
+        linear_state: terminal
