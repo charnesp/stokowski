@@ -37,7 +37,7 @@ def test_extract_report_prefers_last_pair_when_tag_mentioned_in_thinking():
         'prior `<stokowski:report>` for details."}]}}\n'
         '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}\n'
         '{"type":"user","message":{"content":"stdout..."}}\n'
-        '<stokowski:report>\n## Summary\n- Real report only\n</stokowski:report>\n'
+        "<stokowski:report>\n## Summary\n- Real report only\n</stokowski:report>\n"
     )
 
     result = extract_report(agent_output)
