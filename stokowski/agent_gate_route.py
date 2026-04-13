@@ -11,6 +11,9 @@ __all__ = ["ROUTE_END", "ROUTE_START", "decide_agent_gate_transition", "format_r
 if TYPE_CHECKING:
     from .config import StateConfig
 
+# Marker prefix for BASE64-encoded tracking data
+STOKOWSKI64_PREFIX = "stokowski64:"
+
 ROUTE_START = "<<<STOKOWSKI_ROUTE>>>"
 ROUTE_END = "<<<END_STOKOWSKI_ROUTE>>>"
 
@@ -146,9 +149,8 @@ def format_route_error_comment(detail: str) -> str:
     safe = detail.strip()
     if len(safe) > _MAX_ROUTE_ERR_DETAIL:
         safe = safe[:_MAX_ROUTE_ERR_DETAIL] + "…"
-    payload = json.dumps({"type": "route_error", "detail": safe}, separators=(",", ":"))
-    b64 = base64.standard_b64encode(payload.encode("utf-8")).decode("ascii")
-    return (
-        f"<!-- stokowski:route-error b64:{b64} -->\n\n"
-        f"**[Stokowski] Agent-gate routing fallback.**\n\n{safe}"
-    )
+    payload = {"type": "route_error", "detail": safe}
+    json_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    b64 = base64.standard_b64encode(json_bytes).decode("ascii")
+    machine = f"{STOKOWSKI64_PREFIX}{b64}"
+    return f"**[Stokowski] Agent-gate routing fallback.**\n\n{safe}\n\n{machine}"

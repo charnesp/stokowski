@@ -169,8 +169,9 @@ async def test_agent_gate_success_transitions_chosen_key_and_posts_report(tmp_pa
     bodies = [
         str(c.kwargs.get("body") or c.args[1]) for c in mock_client.post_comment.await_args_list
     ]
-    assert any("stokowski:report" in b for b in bodies)
-    assert not any("route-error" in b for b in bodies)
+    # New format uses stokowski64: BASE64 markers
+    assert any("stokowski64:" in b for b in bodies)
+    assert not any("routing fallback" in b for b in bodies)
 
 
 @pytest.mark.asyncio
@@ -213,8 +214,9 @@ async def test_agent_gate_routing_error_posts_fallback_and_error_comment(tmp_pat
     bodies = [
         str(c.kwargs.get("body") or c.args[1]) for c in mock_client.post_comment.await_args_list
     ]
-    assert any("route-error" in b for b in bodies)
-    assert not any("stokowski:report" in b for b in bodies)
+    # New format: route errors use stokowski64: marker, human text has "routing fallback"
+    assert any("stokowski64:" in b for b in bodies)
+    assert any("routing fallback" in b for b in bodies)
 
 
 @pytest.mark.asyncio

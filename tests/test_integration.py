@@ -288,16 +288,26 @@ class TestWorkflowPersistence:
     """Test workflow persistence in tracking (6.6)."""
 
     def test_workflow_in_state_comment(self):
-        """State tracking comment should include workflow."""
+        """State tracking comment should include workflow in BASE64 payload."""
+        import base64
+        import json
+
         from stokowski.tracking import make_state_comment
 
         comment = make_state_comment(state="reproduce", run=1, workflow="debug")
 
-        assert '"workflow": "debug"' in comment
+        # Extract and decode BASE64 payload
+        assert "stokowski64:" in comment
+        marker = comment.split("stokowski64:")[-1].strip()
+        payload = json.loads(base64.standard_b64decode(marker).decode("utf-8"))
+        assert payload["workflow"] == "debug"
         assert "[debug]" in comment  # Human-readable part
 
     def test_workflow_in_gate_comment(self):
-        """Gate tracking comment should include workflow."""
+        """Gate tracking comment should include workflow in BASE64 payload."""
+        import base64
+        import json
+
         from stokowski.tracking import make_gate_comment
 
         comment = make_gate_comment(
@@ -307,7 +317,11 @@ class TestWorkflowPersistence:
             workflow="feature",
         )
 
-        assert '"workflow": "feature"' in comment
+        # Extract and decode BASE64 payload
+        assert "stokowski64:" in comment
+        marker = comment.split("stokowski64:")[-1].strip()
+        payload = json.loads(base64.standard_b64decode(marker).decode("utf-8"))
+        assert payload["workflow"] == "feature"
 
     def test_parse_tracking_with_workflow(self):
         """Should extract workflow from tracking comment."""

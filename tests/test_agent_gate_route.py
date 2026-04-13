@@ -147,11 +147,19 @@ class TestDecideFromClaudeNdjson:
 
 class TestFormatRouteErrorComment:
     def test_machine_payload_is_base64_without_double_hyphen_risk(self):
+        import json
+
         detail = 'bad-->break"}\n'
         body = format_route_error_comment(detail)
-        assert body.startswith("<!-- stokowski:route-error b64:")
-        inner = body.split("b64:", 1)[1].split(" -->", 1)[0]
-        decoded = json.loads(base64.standard_b64decode(inner).decode("utf-8"))
+        # New format: stokowski64:... at end, not HTML comment
+        assert "stokowski64:" in body
+
+        # Extract and decode the BASE64 payload
+        marker = body.split("stokowski64:")[-1].strip()
+        # Verify it's valid base64 (no HTML comment markers)
+        assert "<!--" not in marker
+        assert "-->" not in marker
+        decoded = json.loads(base64.standard_b64decode(marker).decode("utf-8"))
         assert decoded["type"] == "route_error"
         assert "-->" in decoded["detail"]
 

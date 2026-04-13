@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from datetime import UTC, datetime
@@ -9,6 +10,17 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .models import Issue
+
+# Marker prefix for BASE64-encoded tracking data
+STOKOWSKI64_PREFIX = "stokowski64:"
+
+
+def _encode_report_marker(payload: dict) -> str:
+    """Encode a report payload as BASE64 stokowski64 marker."""
+    json_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    b64 = base64.standard_b64encode(json_bytes).decode("ascii")
+    return f"{STOKOWSKI64_PREFIX}{b64}"
+
 
 # Opening / closing tags (case-insensitive matching via separate patterns)
 REPORT_OPEN_PATTERN = re.compile(r"<stokowski:report>", re.IGNORECASE)
@@ -70,10 +82,10 @@ def format_report_comment(
     run: int,
     is_gate: bool = False,
 ) -> str:
-    """Format the report as a Linear comment.
+    """Format the report as a Linear comment with BASE64 marker at end.
 
-    Creates a structured comment with machine-readable JSON in HTML comment
-    and human-readable markdown.
+    Creates a structured comment with human-readable markdown and
+    a BASE64-encoded machine-readable marker at the end.
 
     Args:
         report_content: The extracted report content.
@@ -94,9 +106,9 @@ def format_report_comment(
         "is_gate": is_gate,
     }
 
+    machine = _encode_report_marker(payload)
+
     lines = [
-        f"<!-- stokowski:report {json.dumps(payload)} -->",
-        "",
         f"## 📝 Work Report — Run {run}",
         "",
         f"**Issue:** {issue.identifier} — {issue.title}",
@@ -121,6 +133,8 @@ def format_report_comment(
                 "",
             ]
         )
+
+    lines.extend(["", machine])
 
     return "\n".join(lines)
 
@@ -152,9 +166,9 @@ def format_no_report_comment(
         "note": "No stokowski:report tag found in agent output",
     }
 
+    machine = _encode_report_marker(payload)
+
     return (
-        f"<!-- stokowski:report {json.dumps(payload)} -->\n"
-        f"\n"
         f"## 📝 Work Report — Run {run}\n"
         f"\n"
         f"**Issue:** {issue.identifier} — {issue.title}\n"
@@ -163,5 +177,7 @@ def format_no_report_comment(
         f"---\n"
         f"\n"
         f"*The agent completed without including a structured report. "
-        f"Review the agent's output directly for details.*"
+        f"Review the agent's output directly for details.*\n"
+        f"\n"
+        f"{machine}"
     )

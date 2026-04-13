@@ -58,7 +58,10 @@ def test_has_approval_section_detects_approval():
 
 
 def test_format_report_comment_includes_payload():
-    """Format report as Linear comment with machine-readable payload."""
+    """Format report as Linear comment with machine-readable BASE64 payload at end."""
+    import base64
+    import json
+
     issue = Issue(
         id="test-123",
         identifier="PROJ-1",
@@ -76,15 +79,26 @@ def test_format_report_comment_includes_payload():
         is_gate=True,
     )
 
-    # Should contain machine-readable JSON payload
-    assert "stokowski:report" in result
-    assert '"type": "report"' in result
+    # Should contain BASE64-encoded marker at the end
+    assert "stokowski64:" in result
+    assert result.endswith("=") or result.endswith(
+        base64.standard_b64encode(b'"').decode("ascii")[0]
+    )
+
+    # Decode and verify payload
+    marker = result.split("stokowski64:")[-1].strip()
+    decoded = json.loads(base64.standard_b64decode(marker).decode("utf-8"))
+    assert decoded["type"] == "report"
+    assert decoded["state"] == "implement"
     assert "PROJ-1" in result
     assert "🚪 **Gate Review Required**" in result
 
 
 def test_format_no_report_comment():
-    """Format fallback comment when no report found."""
+    """Format fallback comment with BASE64 marker at end."""
+    import base64
+    import json
+
     issue = Issue(
         id="test-123",
         identifier="PROJ-1",
@@ -98,6 +112,12 @@ def test_format_no_report_comment():
         run=1,
     )
 
-    assert "stokowski:report" in result
-    assert '"has_approval_section": false' in result
+    # Should contain BASE64-encoded marker at the end
+    assert "stokowski64:" in result
+
+    # Decode and verify payload
+    marker = result.split("stokowski64:")[-1].strip()
+    decoded = json.loads(base64.standard_b64decode(marker).decode("utf-8"))
+    assert decoded["type"] == "report"
+    assert decoded["has_approval_section"] is False
     assert "without including a structured report" in result
