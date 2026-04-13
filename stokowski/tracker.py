@@ -11,8 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-from .models import BlockerRef, Issue
-
+from .models import Issue
 
 # Type variable for TrackerConfig subclasses
 T = TypeVar("T", bound="TrackerConfig")
@@ -77,9 +76,7 @@ class TrackerClient(ABC):
         ...
 
     @abstractmethod
-    async def fetch_issues_by_states(
-        self, project_id: str, states: list[str]
-    ) -> list[Issue]:
+    async def fetch_issues_by_states(self, project_id: str, states: list[str]) -> list[Issue]:
         """Fetch issues in specific states (used for terminal cleanup).
 
         Args:
@@ -140,7 +137,7 @@ class TrackerConfig(ABC):
 
     @classmethod
     @abstractmethod
-    def from_dict(cls, config: dict[str, Any]) -> "TrackerConfig":
+    def from_dict(cls, config: dict[str, Any]) -> TrackerConfig:
         """Create configuration from dictionary.
 
         Args:
@@ -193,10 +190,7 @@ class TrackerFactory:
         """
         if kind not in cls._registry:
             registered = list(cls._registry.keys())
-            raise ValueError(
-                f"Unknown tracker type '{kind}'. "
-                f"Registered types: {registered}"
-            )
+            raise ValueError(f"Unknown tracker type '{kind}'. Registered types: {registered}")
 
         config_class = cls._registry[kind]
         tracker_config = config_class.from_dict(config)

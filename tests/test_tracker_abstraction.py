@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock
+
+from stokowski.linear import LinearClient, LinearTrackerConfig
 from stokowski.tracker import (
+    CommentsFetchError,
+    CommentsFetchResult,
     TrackerClient,
     TrackerConfig,
     TrackerFactory,
-    CommentsFetchResult,
-    CommentsFetchError,
 )
-from stokowski.linear import LinearClient, LinearTrackerConfig
 
 
 class TestCommentsFetchResult:
@@ -85,7 +85,6 @@ class MockTrackerClient(TrackerClient):
     """A mock implementation for testing the abstract interface."""
 
     def __init__(self, issues=None):
-        from stokowski.models import Issue
         self.issues = issues or []
         self.comments = {}
         self.closed = False
@@ -96,24 +95,13 @@ class MockTrackerClient(TrackerClient):
         self.closed = True
 
     async def fetch_candidate_issues(self, project_id: str, active_states: list[str]):
-        from stokowski.models import Issue
-        return [
-            issue for issue in self.issues
-            if issue.state in active_states
-        ]
+        return [issue for issue in self.issues if issue.state in active_states]
 
     async def fetch_issue_states_by_ids(self, issue_ids: list[str]):
-        return {
-            issue.id: issue.state
-            for issue in self.issues
-            if issue.id in issue_ids
-        }
+        return {issue.id: issue.state for issue in self.issues if issue.id in issue_ids}
 
     async def fetch_issues_by_states(self, project_id: str, states: list[str]):
-        return [
-            issue for issue in self.issues
-            if issue.state in states
-        ]
+        return [issue for issue in self.issues if issue.state in states]
 
     async def post_comment(self, issue_id: str, body: str):
         self.commented_issues.append((issue_id, body))
@@ -137,8 +125,10 @@ class TestTrackerClientInterface:
 
     @pytest.fixture
     def sample_issue(self):
-        from datetime import datetime, UTC
-        from stokowski.models import Issue, BlockerRef
+        from datetime import UTC, datetime
+
+        from stokowski.models import Issue
+
         return Issue(
             id="issue-123",
             identifier="PROJ-123",
@@ -277,7 +267,7 @@ class MockTrackerConfig(TrackerConfig):
             api_key=config.get("api_key", ""),
         )
 
-    def create_client(self) -> "MockTrackerClient":
+    def create_client(self) -> MockTrackerClient:
         return MockTrackerClient()
 
 
@@ -294,7 +284,9 @@ class TestTrackerFactory:
         """Should create client for registered type."""
         TrackerFactory.register("mock2", MockTrackerConfig)
 
-        client = TrackerFactory.create_client("mock2", {"endpoint": "http://test", "api_key": "key123"})
+        client = TrackerFactory.create_client(
+            "mock2", {"endpoint": "http://test", "api_key": "key123"}
+        )
 
         assert isinstance(client, MockTrackerClient)
 
@@ -325,13 +317,13 @@ class TestLinearClientImplementsInterface:
     def test_has_required_methods(self):
         """Should have all required methods from TrackerClient."""
         required_methods = [
-            'close',
-            'fetch_candidate_issues',
-            'fetch_issue_states_by_ids',
-            'fetch_issues_by_states',
-            'post_comment',
-            'fetch_comments',
-            'update_issue_state',
+            "close",
+            "fetch_candidate_issues",
+            "fetch_issue_states_by_ids",
+            "fetch_issues_by_states",
+            "post_comment",
+            "fetch_comments",
+            "update_issue_state",
         ]
 
         for method in required_methods:
@@ -347,12 +339,12 @@ class TestLinearTrackerConfigImplementsInterface:
 
     def test_has_from_dict(self):
         """Should have from_dict class method."""
-        assert hasattr(LinearTrackerConfig, 'from_dict')
-        assert callable(getattr(LinearTrackerConfig, 'from_dict'))
+        assert hasattr(LinearTrackerConfig, "from_dict")
+        assert callable(LinearTrackerConfig.from_dict)
 
     def test_has_create_client(self):
         """Should have create_client method."""
-        assert hasattr(LinearTrackerConfig, 'create_client')
+        assert hasattr(LinearTrackerConfig, "create_client")
 
 
 class TestLinearFactoryRegistration:
@@ -365,10 +357,13 @@ class TestLinearFactoryRegistration:
 
     def test_create_linear_client(self):
         """Should be able to create a Linear client via factory."""
-        client = TrackerFactory.create_client("linear", {
-            "endpoint": "https://api.linear.app/graphql",
-            "api_key": "test-key",
-            "project_slug": "test-project",
-        })
+        client = TrackerFactory.create_client(
+            "linear",
+            {
+                "endpoint": "https://api.linear.app/graphql",
+                "api_key": "test-key",
+                "project_slug": "test-project",
+            },
+        )
 
         assert isinstance(client, LinearClient)
