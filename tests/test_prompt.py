@@ -20,7 +20,8 @@ from stokowski.prompt import (
 class TestBuildLifecycleSection:
     """Tests for build_lifecycle_section with externalized template."""
 
-    def test_renders_template_with_variables(self):
+    @pytest.mark.asyncio
+    async def test_renders_template_with_variables(self):
         """Template variables are substituted correctly."""
         issue = Issue(
             id="test-123",
@@ -30,7 +31,7 @@ class TestBuildLifecycleSection:
         )
         template = "Issue: {{ issue.identifier }} - {{ issue.title }}"
 
-        result = build_lifecycle_section(
+        result = await build_lifecycle_section(
             lifecycle_template=template,
             issue=issue,
             state_name="implement",
@@ -40,7 +41,8 @@ class TestBuildLifecycleSection:
 
         assert "Issue: PROJ-1 - Test issue" in result
 
-    def test_renders_gate_section_when_has_gate_transition(self):
+    @pytest.mark.asyncio
+    async def test_renders_gate_section_when_has_gate_transition(self):
         """Gate section rendered when template checks has_gate_transition."""
         issue = Issue(
             id="test-123",
@@ -60,7 +62,7 @@ class TestBuildLifecycleSection:
             transitions={"complete": "review"},
         )
 
-        result = build_lifecycle_section(
+        result = await build_lifecycle_section(
             lifecycle_template=template,
             issue=issue,
             state_name="implement",
@@ -71,7 +73,8 @@ class TestBuildLifecycleSection:
 
         assert "GATE REQUIRED" in result
 
-    def test_renders_previous_error_when_provided(self):
+    @pytest.mark.asyncio
+    async def test_renders_previous_error_when_provided(self):
         """Previous error is available in template context."""
         issue = Issue(
             id="test-123",
@@ -81,7 +84,7 @@ class TestBuildLifecycleSection:
         )
         template = "{% if previous_error %}Error: {{ previous_error }}{% endif %}"
 
-        result = build_lifecycle_section(
+        result = await build_lifecycle_section(
             lifecycle_template=template,
             issue=issue,
             state_name="implement",
@@ -92,7 +95,8 @@ class TestBuildLifecycleSection:
 
         assert "Error: Something failed" in result
 
-    def test_renders_rework_info_when_is_rework(self):
+    @pytest.mark.asyncio
+    async def test_renders_rework_info_when_is_rework(self):
         """Rework information available in template context."""
         issue = Issue(
             id="test-123",
@@ -102,7 +106,7 @@ class TestBuildLifecycleSection:
         )
         template = "{% if is_rework %}REWORK MODE{% endif %}"
 
-        result = build_lifecycle_section(
+        result = await build_lifecycle_section(
             lifecycle_template=template,
             issue=issue,
             state_name="implement",
@@ -113,7 +117,8 @@ class TestBuildLifecycleSection:
 
         assert "REWORK MODE" in result
 
-    def test_renders_transitions(self):
+    @pytest.mark.asyncio
+    async def test_renders_transitions(self):
         """Transitions available in template context."""
         issue = Issue(
             id="test-123",
@@ -130,7 +135,7 @@ class TestBuildLifecycleSection:
             transitions={"complete": "review", "fail": "rework"},
         )
 
-        result = build_lifecycle_section(
+        result = await build_lifecycle_section(
             lifecycle_template=template,
             issue=issue,
             state_name="implement",
@@ -141,7 +146,8 @@ class TestBuildLifecycleSection:
         assert "complete:review" in result
         assert "fail:rework" in result
 
-    def test_agent_gate_lifecycle_includes_routing_contract(self):
+    @pytest.mark.asyncio
+    async def test_agent_gate_lifecycle_includes_routing_contract(self):
         """Agent-gate states document STOKOWSKI_ROUTE markers, report tags, and keys."""
         repo_root = Path(__file__).resolve().parent.parent
         lifecycle_template = (repo_root / "prompts" / "lifecycle.md").read_text()
@@ -158,7 +164,7 @@ class TestBuildLifecycleSection:
             default_transition="to_human",
             transitions={"findings": "fix", "to_human": "human"},
         )
-        result = build_lifecycle_section(
+        result = await build_lifecycle_section(
             lifecycle_template=lifecycle_template,
             issue=issue,
             state_name="route",
@@ -172,7 +178,8 @@ class TestBuildLifecycleSection:
         assert "findings" in result
         assert "to_human" in result
 
-    def test_renders_recent_comments(self):
+    @pytest.mark.asyncio
+    async def test_renders_recent_comments(self):
         """Recent comments available in template context."""
         issue = Issue(
             id="test-123",
@@ -182,7 +189,7 @@ class TestBuildLifecycleSection:
         )
         template = "{% for comment in recent_comments %}{{ comment.body }}{% endfor %}"
 
-        result = build_lifecycle_section(
+        result = await build_lifecycle_section(
             lifecycle_template=template,
             issue=issue,
             state_name="implement",
@@ -312,7 +319,8 @@ class TestLoadPromptFile:
 class TestAssemblePrompt:
     """Tests for assemble_prompt function."""
 
-    def test_loads_lifecycle_template_from_config(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_loads_lifecycle_template_from_config(self, tmp_path):
         """Lifecycle template loaded from configured path."""
         # Create workflow directory with lifecycle template
         workflow_dir = tmp_path / "workflow"
@@ -336,7 +344,7 @@ class TestAssemblePrompt:
         stage_file = workflow_dir / "prompts" / "stage.md"
         stage_file.write_text("Stage content")
 
-        result = assemble_prompt(
+        result = await assemble_prompt(
             cfg=cfg,
             workflow_dir=str(workflow_dir),
             issue=issue,
@@ -347,7 +355,8 @@ class TestAssemblePrompt:
 
         assert "LIFECYCLE: PROJ-1" in result
 
-    def test_uses_default_lifecycle_path_when_not_configured(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_uses_default_lifecycle_path_when_not_configured(self, tmp_path):
         """Default lifecycle path used when not explicitly configured."""
         workflow_dir = tmp_path / "workflow"
         workflow_dir.mkdir()
@@ -364,7 +373,7 @@ class TestAssemblePrompt:
         )
         state_cfg = StateConfig(name="implement", type="agent")
 
-        result = assemble_prompt(
+        result = await assemble_prompt(
             cfg=cfg,
             workflow_dir=str(workflow_dir),
             issue=issue,
@@ -375,7 +384,8 @@ class TestAssemblePrompt:
 
         assert "DEFAULT LIFECYCLE" in result
 
-    def test_raises_when_lifecycle_file_missing(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_raises_when_lifecycle_file_missing(self, tmp_path):
         """FileNotFoundError when lifecycle template is missing."""
         cfg = ServiceConfig(prompts=PromptsConfig(lifecycle_prompt="prompts/missing.md"))
         issue = Issue(
@@ -387,7 +397,7 @@ class TestAssemblePrompt:
         state_cfg = StateConfig(name="implement", type="agent")
 
         with pytest.raises(FileNotFoundError):
-            assemble_prompt(
+            await assemble_prompt(
                 cfg=cfg,
                 workflow_dir=str(tmp_path),
                 issue=issue,
@@ -400,18 +410,21 @@ class TestAssemblePrompt:
 class TestEmbedImagesInPrompt:
     """Tests for embed_images_in_prompt function."""
 
-    def test_empty_comments_returns_empty(self):
+    @pytest.mark.asyncio
+    async def test_empty_comments_returns_empty(self):
         """Empty comments list returns empty string."""
-        result = embed_images_in_prompt([])
+        result = await embed_images_in_prompt([])
         assert result == ""
 
-    def test_comments_without_images_returns_empty(self):
+    @pytest.mark.asyncio
+    async def test_comments_without_images_returns_empty(self):
         """Comments without downloaded_images return empty string."""
         comments = [{"id": "c1", "body": "No images"}]
-        result = embed_images_in_prompt(comments)
+        result = await embed_images_in_prompt(comments)
         assert result == ""
 
-    def test_embeds_single_image(self, tmp_path: Path):
+    @pytest.mark.asyncio
+    async def test_embeds_single_image(self, tmp_path: Path):
         """Single image is embedded as base64 markdown."""
         # Create a test image file
         img_dir = tmp_path / "images"
@@ -433,14 +446,15 @@ class TestEmbedImagesInPrompt:
             }
         ]
 
-        result = embed_images_in_prompt(comments)
+        result = await embed_images_in_prompt(comments)
 
         assert "![screenshot.png]" in result
         assert "data:image/png;base64," in result
         # Should contain base64 encoded content
         assert "iVBOR" in result or "data:image/png;base64," in result
 
-    def test_respects_max_images_per_comment(self, tmp_path: Path):
+    @pytest.mark.asyncio
+    async def test_respects_max_images_per_comment(self, tmp_path: Path):
         """max_images_per_comment limit is respected."""
         img_dir = tmp_path / "images"
         img_dir.mkdir()
@@ -459,12 +473,13 @@ class TestEmbedImagesInPrompt:
 
         comments = [{"id": "c1", "body": "Many images", "downloaded_images": images}]
 
-        result = embed_images_in_prompt(comments, max_images_per_comment=2)
+        result = await embed_images_in_prompt(comments, max_images_per_comment=2)
 
         # Should only have 2 image references
         assert result.count("![") == 2
 
-    def test_respects_max_total_images(self, tmp_path: Path):
+    @pytest.mark.asyncio
+    async def test_respects_max_total_images(self, tmp_path: Path):
         """max_total_images limit is respected across comments."""
         img_dir = tmp_path / "images"
         img_dir.mkdir()
@@ -484,12 +499,13 @@ class TestEmbedImagesInPrompt:
                 )
             comments.append({"id": f"c{c}", "body": f"Comment {c}", "downloaded_images": images})
 
-        result = embed_images_in_prompt(comments, max_total_images=5)
+        result = await embed_images_in_prompt(comments, max_total_images=5)
 
         # Should only have 5 images total (not 9)
         assert result.count("![") == 5
 
-    def test_skips_missing_files(self, tmp_path: Path, caplog):
+    @pytest.mark.asyncio
+    async def test_skips_missing_files(self, tmp_path: Path, caplog):
         """Missing image files are skipped with warning."""
         import logging
 
@@ -508,12 +524,13 @@ class TestEmbedImagesInPrompt:
         ]
 
         with caplog.at_level(logging.WARNING):
-            result = embed_images_in_prompt(comments)
+            result = await embed_images_in_prompt(comments)
 
         assert result == ""
         assert "not found" in caplog.text
 
-    def test_uses_filename_when_no_title(self, tmp_path: Path):
+    @pytest.mark.asyncio
+    async def test_uses_filename_when_no_title(self, tmp_path: Path):
         """Filename is used when title is missing."""
         img_dir = tmp_path / "images"
         img_dir.mkdir()
@@ -530,7 +547,7 @@ class TestEmbedImagesInPrompt:
             }
         ]
 
-        result = embed_images_in_prompt(comments)
+        result = await embed_images_in_prompt(comments)
 
         assert "![unnamed.png]" in result
 

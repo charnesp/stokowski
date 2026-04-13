@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -95,9 +94,7 @@ async def test_download_comment_images_no_attachments(tmp_path: Path):
         identifier="MAN-27",
         title="Test Issue",
     )
-    comments = [
-        {"id": "c1", "body": "No attachments here", "createdAt": "2026-01-01T00:00:00Z"}
-    ]
+    comments = [{"id": "c1", "body": "No attachments here", "createdAt": "2026-01-01T00:00:00Z"}]
 
     result = await client.download_comment_images(comments, issue, tmp_path)
 

@@ -482,8 +482,6 @@ class LinearClient(TrackerClient):
         b"\xff\xd8\xff": "image/jpeg",
         b"GIF87a": "image/gif",
         b"GIF89a": "image/gif",
-        b"RIFF": "image/webp",  # WebP starts with RIFF....WEBP
-        b"\x00\x00\x00 ftyp": "image/heic",
     }
 
     _EXTENSION_TO_MIME: dict[str, str] = {
@@ -503,6 +501,26 @@ class LinearClient(TrackerClient):
         return LinearClient._EXTENSION_TO_MIME.get(ext)
 
     @staticmethod
+    def _is_webp(data: bytes) -> bool:
+        """Check if data is a WebP image (RIFF....WEBP at offset 8)."""
+        return len(data) >= 12 and data[0:4] == b"RIFF" and data[8:12] == b"WEBP"
+
+    @staticmethod
+    def _is_heic(data: bytes) -> bool:
+        """Check if data is a HEIC/HEIF image (ISO Base Media File Format).
+
+        HEIC uses ISO BMFF with 'ftyp' box at offset 4 and brand at offset 8.
+        """
+        if len(data) < 12:
+            return False
+        # ftyp box at offset 4
+        if data[4:8] != b"ftyp":
+            return False
+        # Brand at offset 8
+        brand = data[8:12]
+        return brand in (b"heic", b"heix", b"mif1", b"msf1", b"hevc")
+
+    @staticmethod
     def _validate_image_content(data: bytes) -> str | None:
         """Validate image content by magic bytes and return detected MIME type.
 
@@ -511,12 +529,16 @@ class LinearClient(TrackerClient):
         # Check magic bytes
         for magic, mime in LinearClient._IMAGE_MAGIC_BYTES.items():
             if data.startswith(magic):
-                # Special handling for WebP (RIFF....WEBP)
-                if magic == b"RIFF" and len(data) >= 12:
-                    if data[8:12] == b"WEBP":
-                        return "image/webp"
-                    continue
                 return mime
+
+        # Check WebP (requires length >= 12 for complete validation)
+        if LinearClient._is_webp(data):
+            return "image/webp"
+
+        # Check HEIC/HEIF (ISO BMFF format)
+        if LinearClient._is_heic(data):
+            return "image/heic"
+
         return None
 
     async def _download_image(self, url: str, dest_path: Path) -> bool:
@@ -618,6 +640,10 @@ class LinearClient(TrackerClient):
                 filename = attachment.get("title", "image")
                 # Sanitize filename - replace non-alphanumeric with underscore
                 safe_filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in filename)
+                # Handle edge cases: empty or dot-only names
+                safe_filename = safe_filename.strip("._")
+                if not safe_filename:
+                    safe_filename = "image"
                 # Ensure it has a reasonable extension
                 if not Path(safe_filename).suffix:
                     safe_filename += ".png"

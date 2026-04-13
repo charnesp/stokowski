@@ -1348,7 +1348,7 @@ class Orchestrator:
             except Exception as e:
                 logger.warning(f"Failed to fetch comments for prompt: {e}")
 
-            return assemble_prompt(
+            return await assemble_prompt(
                 cfg=self.cfg,
                 workflow_dir=str(self.workflow_path.parent),
                 issue=issue,
@@ -1365,9 +1365,9 @@ class Orchestrator:
             )
 
         # Legacy fallback
-        return self._render_prompt(issue, attempt_num, state_name, workflow)
+        return await self._render_prompt(issue, attempt_num, state_name, workflow)
 
-    def _render_prompt(
+    async def _render_prompt(
         self,
         issue: Issue,
         attempt_num: int | None,
@@ -1397,7 +1397,7 @@ class Orchestrator:
             last_completed = self._last_completed_at.get(issue.id)
             last_run_at = last_completed.isoformat() if last_completed else None
 
-            return assemble_prompt(
+            return await assemble_prompt(
                 cfg=self.cfg,
                 workflow_dir=str(self.workflow_path.parent),
                 issue=issue,

@@ -8,6 +8,7 @@ Assembles prompts from:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from pathlib import Path
@@ -184,7 +185,7 @@ def build_lifecycle_context(
     return context
 
 
-def build_lifecycle_section(
+async def build_lifecycle_section(
     lifecycle_template: str,
     issue: Issue,
     state_name: str,
@@ -235,14 +236,14 @@ def build_lifecycle_section(
 
     # Embed images if requested and present
     if embed_images and recent_comments and context.get("has_images"):
-        image_section = embed_images_in_prompt(recent_comments)
+        image_section = await embed_images_in_prompt(recent_comments)
         if image_section:
             rendered = rendered + "\n\n" + image_section
 
     return rendered
 
 
-def assemble_prompt(
+async def assemble_prompt(
     cfg: ServiceConfig,
     workflow_dir: str | Path,
     issue: Issue,
@@ -330,7 +331,7 @@ def assemble_prompt(
     # Load lifecycle template (required)
     lifecycle_template = load_prompt_file(prompts.lifecycle_prompt, workflow_dir)
 
-    lifecycle = build_lifecycle_section(
+    lifecycle = await build_lifecycle_section(
         lifecycle_template=lifecycle_template,
         issue=issue,
         state_name=state_name,
@@ -362,7 +363,7 @@ def _get_mime_type_from_path(path: Path) -> str:
     return mime_types.get(ext, "image/png")
 
 
-def embed_images_in_prompt(
+async def embed_images_in_prompt(
     comments: list[dict[str, Any]],
     max_images_per_comment: int = 5,
     max_total_images: int = 20,
@@ -401,8 +402,8 @@ def embed_images_in_prompt(
                 continue
 
             try:
-                # Read and encode
-                data = path.read_bytes()
+                # Read and encode using async thread to avoid blocking
+                data = await asyncio.to_thread(path.read_bytes)
                 mime_type = img_info.get("mime_type") or _get_mime_type_from_path(path)
                 b64 = base64.b64encode(data).decode("ascii")
 
