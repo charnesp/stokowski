@@ -23,11 +23,12 @@ from .config import (
     parse_workflow_file,
     validate_config,
 )
-from .linear import LinearClient, LinearCommentsFetchError
+from .linear import LinearClient  # noqa: F401 - triggers registration
 from .models import Issue, RetryEntry, RunAttempt
 from .prompt import assemble_prompt
 from .reporting import extract_report, format_no_report_comment, format_report_comment
 from .runner import run_turn
+from .tracker import CommentsFetchError, TrackerClient
 from .tracking import (
     make_gate_comment,
     make_state_comment,
@@ -62,7 +63,7 @@ class Orchestrator:
         self.total_seconds_running: float = 0
 
         # Internal
-        self._linear: LinearClient | None = None
+        self._tracker: TrackerClient | None = None
         self._tasks: dict[str, asyncio.Task] = {}
         self._retry_timers: dict[str, asyncio.TimerHandle] = {}
         self._child_pids: set[int] = set()  # Track claude subprocess PIDs
@@ -116,19 +117,16 @@ class Orchestrator:
 
         return validate_config(self.cfg)
 
-    def _ensure_linear_client(self) -> LinearClient:
-        if self._linear is None:
-            self._linear = LinearClient(
-                endpoint=self.cfg.tracker.endpoint,
-                api_key=self.cfg.resolved_api_key(),
-            )
-        return self._linear
+    def _ensure_tracker_client(self) -> TrackerClient:
+        if self._tracker is None:
+            self._tracker = self.cfg.create_tracker_client()
+        return self._tracker
 
-    async def _load_issue_comments(self, client: LinearClient, issue: Issue) -> list[dict]:
+    async def _load_issue_comments(self, client: TrackerClient, issue: Issue) -> list[dict]:
         """Fetch issue comments; warn when history may be truncated.
 
         Raises:
-            LinearCommentsFetchError: The first page of comments could not be loaded.
+            CommentsFetchError: The first page of comments could not be loaded.
         """
         result = await client.fetch_comments(issue.id)
         if not result.complete:
@@ -199,13 +197,13 @@ class Orchestrator:
             await asyncio.sleep(0.5)
         self._tasks.clear()
 
-        if self._linear:
-            await self._linear.close()
+        if self._tracker:
+            await self._tracker.close()
 
     async def _startup_cleanup(self):
         """Remove workspaces for issues already in terminal states."""
         try:
-            client = self._ensure_linear_client()
+            client = self._ensure_tracker_client()
             terminal = await client.fetch_issues_by_states(
                 self.cfg.resolved_project_slug(),
                 self.cfg.terminal_linear_states(),
@@ -366,7 +364,7 @@ class Orchestrator:
             return state_name, run
 
         # Fetch comments from Linear and parse latest tracking
-        client = self._ensure_linear_client()
+        client = self._ensure_tracker_client()
         comments = await self._load_issue_comments(client, issue)
         tracking = parse_latest_tracking(comments)
 
@@ -449,7 +447,7 @@ class Orchestrator:
         the situation. Prevents issues from getting stuck in limbo.
         """
         logger.warning(f"Handling orphaned issue={issue.identifier} context={context}")
-        client = self._ensure_linear_client()
+        client = self._ensure_tracker_client()
 
         # Move to terminal state
         terminal_state = (
@@ -567,7 +565,7 @@ class Orchestrator:
         prompt = state_cfg.prompt if state_cfg else ""
         run = self._issue_state_runs.get(issue.id, 1)
 
-        client = self._ensure_linear_client()
+        client = self._ensure_tracker_client()
 
         comment = make_gate_comment(
             state=state_name,
@@ -632,7 +630,7 @@ class Orchestrator:
             return
 
         # Fetch comments and parse tracking to get workflow from tracking comment
-        client = self._ensure_linear_client()
+        client = self._ensure_tracker_client()
         comments = await self._load_issue_comments(client, issue)
         tracking = parse_latest_tracking(comments)
 
@@ -673,7 +671,7 @@ class Orchestrator:
                 else "Done"
             )
             try:
-                client = self._ensure_linear_client()
+                client = self._ensure_tracker_client()
                 moved = await client.update_issue_state(issue.id, terminal_state)
                 if moved:
                     logger.info(f"Moved {issue.identifier} to terminal state '{terminal_state}'")
@@ -705,7 +703,7 @@ class Orchestrator:
         else:
             # Agent state — post state comment, ensure active Linear state, schedule retry
             self._issue_current_state[issue.id] = target_name
-            client = self._ensure_linear_client()
+            client = self._ensure_tracker_client()
             comment = make_state_comment(
                 state=target_name,
                 run=run,
@@ -733,7 +731,7 @@ class Orchestrator:
         if not has_gates:
             return
 
-        client = self._ensure_linear_client()
+        client = self._ensure_tracker_client()
 
         # Fetch gate-approved issues
         try:
@@ -751,7 +749,7 @@ class Orchestrator:
 
             try:
                 comments = await self._load_issue_comments(client, issue)
-            except LinearCommentsFetchError as e:
+            except CommentsFetchError as e:
                 logger.warning(
                     "Skipping %s this tick: could not load comments for gate approval: %s",
                     issue.identifier,
@@ -853,7 +851,7 @@ class Orchestrator:
 
             try:
                 comments = await self._load_issue_comments(client, issue)
-            except LinearCommentsFetchError as e:
+            except CommentsFetchError as e:
                 logger.warning(
                     "Skipping %s this tick: could not load comments for rework handling: %s",
                     issue.identifier,
@@ -979,7 +977,7 @@ class Orchestrator:
 
         # Part 3: Fetch candidates
         try:
-            client = self._ensure_linear_client()
+            client = self._ensure_tracker_client()
             candidates = await client.fetch_candidate_issues(
                 self.cfg.resolved_project_slug(),
                 self.cfg.active_linear_states(),
@@ -1170,7 +1168,7 @@ class Orchestrator:
             todo_state = self.cfg.linear_states.todo
             if todo_state and issue.state.strip().lower() == todo_state.strip().lower():
                 try:
-                    client = self._ensure_linear_client()
+                    client = self._ensure_tracker_client()
                     active_state = self.cfg.linear_states.active
                     moved = await client.update_issue_state(issue.id, active_state)
                     if moved:
@@ -1190,7 +1188,7 @@ class Orchestrator:
             if state_name:
                 run = self._issue_state_runs.get(issue.id, 1)
                 if run == 1 and (attempt.attempt is None or attempt.attempt == 0):
-                    client = self._ensure_linear_client()
+                    client = self._ensure_tracker_client()
                     comment = make_state_comment(
                         state=state_name,
                         run=run,
@@ -1247,7 +1245,7 @@ class Orchestrator:
                     if turn > 0:
                         current_state = issue.state
                         try:
-                            client = self._ensure_linear_client()
+                            client = self._ensure_tracker_client()
                             states = await client.fetch_issue_states_by_ids([issue.id])
                             current_state = states.get(issue.id, issue.state)
                             state_lower = current_state.strip().lower()
@@ -1329,7 +1327,7 @@ class Orchestrator:
             # Fetch comments for lifecycle context
             comments: list[dict] | None = None
             try:
-                client = self._ensure_linear_client()
+                client = self._ensure_tracker_client()
                 comments = await self._load_issue_comments(client, issue)
             except Exception as e:
                 logger.warning(f"Failed to fetch comments for prompt: {e}")
@@ -1454,10 +1452,10 @@ class Orchestrator:
 
         workflow = self._workflow_for_run_attempt(issue, attempt)
         if workflow is None:
-            client = self._ensure_linear_client()
+            client = self._ensure_tracker_client()
             try:
                 comments = await self._load_issue_comments(client, issue)
-            except LinearCommentsFetchError:
+            except CommentsFetchError:
                 comments = []
             tracking = parse_latest_tracking(comments)
             workflow = await self._resolve_workflow_for_issue(issue, tracking)
@@ -1504,7 +1502,7 @@ class Orchestrator:
 
         # Post to Linear
         try:
-            client = self._ensure_linear_client()
+            client = self._ensure_tracker_client()
             success = await client.post_comment(issue.id, comment)
             if success:
                 logger.info(f"Posted work report for {issue.identifier}")
@@ -1544,7 +1542,7 @@ class Orchestrator:
             return
 
         chosen, route_err = decide_agent_gate_transition(attempt.full_output or "", state_cfg)
-        client = self._ensure_linear_client()
+        client = self._ensure_tracker_client()
 
         if route_err:
             try:
@@ -1765,7 +1763,7 @@ class Orchestrator:
 
         # Fetch fresh candidates to check eligibility
         try:
-            client = self._ensure_linear_client()
+            client = self._ensure_tracker_client()
             candidates = await client.fetch_candidate_issues(
                 self.cfg.resolved_project_slug(),
                 self.cfg.active_linear_states(),
@@ -1809,7 +1807,7 @@ class Orchestrator:
         running_ids = list(self.running.keys())
 
         try:
-            client = self._ensure_linear_client()
+            client = self._ensure_tracker_client()
             states = await client.fetch_issue_states_by_ids(running_ids)
         except Exception as e:
             logger.warning(f"Reconciliation state fetch failed: {e}")

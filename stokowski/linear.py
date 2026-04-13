@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from typing import Any
 
 import httpx
 
 from .datetime_parse import parse_linear_iso_datetime
 from .models import BlockerRef, Issue
+from .tracker import (
+    CommentsFetchError,
+    CommentsFetchResult,
+    TrackerClient,
+    TrackerConfig,
+    TrackerFactory,
+)
 
 logger = logging.getLogger("stokowski.linear")
 
@@ -17,16 +24,21 @@ logger = logging.getLogger("stokowski.linear")
 MAX_COMMENT_PAGES = 500
 
 
-@dataclass(frozen=True)
-class CommentsFetchResult:
-    """Result of ``LinearClient.fetch_comments``."""
+class LinearCommentsFetchError(CommentsFetchError):
+    """Raised when the first page of issue comments cannot be fetched.
 
-    nodes: list[dict]
-    complete: bool
+    Backwards-compatible alias for CommentsFetchError.
+    """
 
 
-class LinearCommentsFetchError(RuntimeError):
-    """Raised when the first page of issue comments cannot be fetched."""
+# Re-export CommentsFetchError for backwards compatibility
+__all__ = [
+    "LinearClient",
+    "LinearCommentsFetchError",
+    "LinearTrackerConfig",
+    "CommentsFetchResult",
+    "MAX_COMMENT_PAGES",
+]
 
 
 CANDIDATE_QUERY = """
@@ -159,7 +171,7 @@ query($issueId: String!) {
 """
 
 
-def _parse_datetime(val: str | None) -> datetime | None:
+def _parse_datetime(val: str | None) -> Any:
     """Parse Linear datetimes to aware UTC (same rules as ``tracking``)."""
     return parse_linear_iso_datetime(val)
 
@@ -206,7 +218,9 @@ def _normalize_issue(node: dict) -> Issue:
     )
 
 
-class LinearClient:
+class LinearClient(TrackerClient):
+    """Linear API client implementing the TrackerClient interface."""
+
     def __init__(self, endpoint: str, api_key: str, timeout_ms: int = 30_000):
         self.endpoint = endpoint
         self.api_key = api_key
@@ -219,7 +233,7 @@ class LinearClient:
             timeout=self.timeout,
         )
 
-    async def close(self):
+    async def close(self) -> None:
         await self._client.aclose()
 
     async def _graphql(self, query: str, variables: dict) -> dict:
@@ -234,7 +248,7 @@ class LinearClient:
         return data.get("data", {})
 
     async def fetch_candidate_issues(
-        self, project_slug: str, active_states: list[str]
+        self, project_id: str, active_states: list[str]
     ) -> list[Issue]:
         """Fetch all issues in active states for the project."""
         issues: list[Issue] = []
@@ -242,7 +256,7 @@ class LinearClient:
 
         while True:
             variables: dict = {
-                "projectSlug": project_slug,
+                "projectSlug": project_id,
                 "states": active_states,
             }
             if cursor:
@@ -278,14 +292,14 @@ class LinearClient:
                 result[node["id"]] = node["state"]["name"]
         return result
 
-    async def fetch_issues_by_states(self, project_slug: str, states: list[str]) -> list[Issue]:
+    async def fetch_issues_by_states(self, project_id: str, states: list[str]) -> list[Issue]:
         """Fetch issues in specific states (for terminal cleanup)."""
         issues: list[Issue] = []
         cursor = None
 
         while True:
             variables: dict = {
-                "projectSlug": project_slug,
+                "projectSlug": project_id,
                 "states": states,
             }
             if cursor:
@@ -452,3 +466,35 @@ class LinearClient:
         except Exception as e:
             logger.error(f"Failed to update state for {issue_id}: {e}")
             return False
+
+
+@dataclass
+class LinearTrackerConfig(TrackerConfig):
+    """Configuration for Linear tracker."""
+
+    endpoint: str = "https://api.linear.app/graphql"
+    api_key: str = ""
+    project_slug: str = ""
+    timeout_ms: int = 30_000
+
+    @classmethod
+    def from_dict(cls, config: dict[str, Any]) -> LinearTrackerConfig:
+        """Create configuration from dictionary."""
+        return cls(
+            endpoint=config.get("endpoint", "https://api.linear.app/graphql"),
+            api_key=config.get("api_key", ""),
+            project_slug=config.get("project_slug", ""),
+            timeout_ms=config.get("timeout_ms", 30_000),
+        )
+
+    def create_client(self) -> TrackerClient:
+        """Create and return a LinearClient instance."""
+        return LinearClient(
+            endpoint=self.endpoint,
+            api_key=self.api_key,
+            timeout_ms=self.timeout_ms,
+        )
+
+
+# Register with the tracker factory
+TrackerFactory.register("linear", LinearTrackerConfig)

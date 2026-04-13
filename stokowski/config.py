@@ -15,11 +15,25 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
-class TrackerConfig:
+class TrackerConnectionConfig:
+    """Configuration for connecting to a tracker backend.
+
+    This is a generic configuration that can be used with any
+    tracker implementation (Linear, GitHub Issues, etc.).
+    """
+
     kind: str = "linear"
     endpoint: str = "https://api.linear.app/graphql"
     api_key: str = ""
     project_slug: str = ""
+
+    # Additional tracker-specific configuration options
+    # These are passed through to the tracker client
+    extra: dict[str, Any] = field(default_factory=lambda: {})
+
+
+# Backwards-compatible alias for code that imports TrackerConfig
+TrackerConfig = TrackerConnectionConfig
 
 
 @dataclass
@@ -151,7 +165,7 @@ class WorkflowDefinition:
 
 @dataclass
 class ServiceConfig:
-    tracker: TrackerConfig = field(default_factory=TrackerConfig)
+    tracker: TrackerConnectionConfig = field(default_factory=TrackerConnectionConfig)
     polling: PollingConfig = field(default_factory=PollingConfig)
     workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
     hooks: HooksConfig = field(default_factory=HooksConfig)
@@ -183,11 +197,30 @@ class ServiceConfig:
             return resolved
         return os.environ.get("LINEAR_PROJECT_SLUG", "")
 
+    def create_tracker_client(self):
+        """Create and return a tracker client based on configuration.
+
+        Uses the TrackerFactory to instantiate the appropriate client
+        based on tracker.kind configuration.
+
+        Returns:
+            TrackerClient instance configured from workflow.yaml
+        """
+        from .tracker import TrackerFactory  # Import here to avoid circular imports
+
+        config_dict = {
+            "endpoint": self.tracker.endpoint,
+            "api_key": self.resolved_api_key(),
+            "project_slug": self.resolved_project_slug(),
+            **self.tracker.extra,
+        }
+        return TrackerFactory.create_client(self.tracker.kind, config_dict)
+
     def agent_env(self) -> dict[str, str]:
         """Build env vars to pass to agent subprocesses.
 
-        Includes the parent process env plus Linear config from workflow.yaml,
-        so agents can connect to Linear using the same credentials as Stokowski.
+        Includes the parent process env plus tracker config from workflow.yaml,
+        so agents can connect to the tracker using the same credentials as Stokowski.
         """
         env = dict(os.environ)
         api_key = self.resolved_api_key()
@@ -200,6 +233,8 @@ class ServiceConfig:
         endpoint = _resolve_env(self.tracker.endpoint)
         if endpoint:
             env["LINEAR_ENDPOINT"] = endpoint
+        # Pass tracker kind for agent awareness
+        env["TRACKER_KIND"] = self.tracker.kind
         return env
 
     @property
@@ -448,11 +483,14 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
 
     # Parse tracker
     t: dict[str, Any] = config_raw.get("tracker", {}) or {}  # type: ignore[assignment]
-    tracker = TrackerConfig(
+    tracker = TrackerConnectionConfig(
         kind=str(t.get("kind", "linear")),
         endpoint=str(t.get("endpoint", "https://api.linear.app/graphql")),
         api_key=str(t.get("api_key", "")),
         project_slug=str(t.get("project_slug", "")),
+        extra={
+            k: v for k, v in t.items() if k not in ("kind", "endpoint", "api_key", "project_slug")
+        },
     )
 
     # Parse polling

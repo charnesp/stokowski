@@ -157,7 +157,7 @@ async def test_agent_gate_success_transitions_chosen_key_and_posts_report(tmp_pa
         return t
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_safe_transition", mock_safe),
         patch("stokowski.orchestrator.asyncio.create_task", side_effect=capture_create_task),
     ):
@@ -202,7 +202,7 @@ async def test_agent_gate_routing_error_posts_fallback_and_error_comment(tmp_pat
         return t
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_safe_transition", mock_safe),
         patch("stokowski.orchestrator.asyncio.create_task", side_effect=capture_create_task),
     ):
@@ -248,7 +248,7 @@ async def test_agent_state_still_complete_and_generic_report(tmp_path):
         return t
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_safe_transition", mock_safe),
         patch("stokowski.orchestrator.asyncio.create_task", side_effect=capture_create_task),
     ):
@@ -295,7 +295,7 @@ async def test_timed_out_or_stalled_does_not_post_work_report(tmp_path, status: 
         return t
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch("stokowski.orchestrator.asyncio.create_task", side_effect=capture_create_task),
     ):
         orch._on_worker_exit(issue, attempt)
@@ -368,7 +368,7 @@ async def test_agent_gate_legacy_root_states_same_as_workflows(tmp_path):
         return t
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_safe_transition", mock_safe),
         patch("stokowski.orchestrator.asyncio.create_task", side_effect=capture_create_task),
     ):
@@ -408,7 +408,7 @@ async def test_agent_gate_resolves_workflow_from_attempt_when_cache_empty(tmp_pa
         return t
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_safe_transition", mock_safe),
         patch("stokowski.orchestrator.asyncio.create_task", side_effect=capture_create_task),
     ):
@@ -511,7 +511,7 @@ async def test_get_workflow_for_issue_beats_stale_cache_on_exit(tmp_path):
         return t
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_safe_transition", mock_safe),
         patch("stokowski.orchestrator.asyncio.create_task", side_effect=capture_create_task),
     ):
@@ -594,7 +594,7 @@ async def test_worker_exit_label_workflow_mismatch_orphans_config_error_not_tran
         return t
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_handle_orphaned_issue", mock_handle_orphan),
         patch.object(orch, "_safe_transition", mock_safe),
         patch("stokowski.orchestrator.asyncio.create_task", side_effect=capture_create_task),
@@ -653,7 +653,7 @@ async def test_worker_exit_unknown_workflow_name_orphans_not_label_fallback(tmp_
         return t
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_handle_orphaned_issue", mock_handle_orphan),
         patch.object(orch, "_workflow_for_run_attempt", mock_wf_for_attempt),
         patch.object(orch, "_safe_transition", mock_safe),
@@ -684,7 +684,7 @@ async def test_handle_gate_responses_missing_gate_state_logs_and_orphans(tmp_pat
     mock_handle = AsyncMock()
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_handle_orphaned_issue", mock_handle),
     ):
         await orch._handle_gate_responses()
@@ -716,7 +716,7 @@ async def test_handle_gate_responses_uses_last_waiting_gate_not_latest_tracking(
     mock_client.post_comment = AsyncMock(return_value=True)
     mock_client.update_issue_state = AsyncMock(return_value=True)
 
-    with patch.object(orch, "_ensure_linear_client", return_value=mock_client):
+    with patch.object(orch, "_ensure_tracker_client", return_value=mock_client):
         await orch._handle_gate_responses()
 
     mock_client.update_issue_state.assert_awaited()
@@ -747,7 +747,7 @@ async def test_handle_gate_approval_invalid_target_orphans_no_approved_tracking(
     orch.cfg.workflows["default"].states["human"].transitions["approve"] = "missing_state"
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_handle_orphaned_issue", mock_handle),
     ):
         await orch._handle_gate_responses()
@@ -782,7 +782,7 @@ async def test_handle_rework_max_exceeded_orphans(tmp_path):
     mock_handle = AsyncMock()
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_handle_orphaned_issue", mock_handle),
     ):
         await orch._handle_gate_responses()
@@ -811,7 +811,7 @@ async def test_handle_rework_missing_rework_to_orphans(tmp_path):
     mock_handle = AsyncMock()
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_handle_orphaned_issue", mock_handle),
     ):
         await orch._handle_gate_responses()
@@ -838,7 +838,7 @@ async def test_handle_rework_invalid_rework_to_orphans(tmp_path):
     mock_handle = AsyncMock()
 
     with (
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch.object(orch, "_handle_orphaned_issue", mock_handle),
     ):
         await orch._handle_gate_responses()
@@ -896,7 +896,7 @@ async def test_worker_exit_success_unresolved_workflow_orphans_not_legacy_retry(
         patch.object(orch, "_workflow_for_run_attempt", return_value=None),
         patch.object(orch, "_handle_orphaned_issue", mock_handle_orphan),
         patch.object(orch, "_schedule_retry", mock_schedule),
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch("stokowski.orchestrator.asyncio.create_task", side_effect=capture_create_task),
     ):
         orch._on_worker_exit(issue, attempt)
@@ -942,7 +942,7 @@ async def test_worker_exit_failed_unresolved_workflow_orphans_not_retry(tmp_path
         patch.object(orch, "_workflow_for_run_attempt", return_value=None),
         patch.object(orch, "_handle_orphaned_issue", mock_handle_orphan),
         patch.object(orch, "_schedule_retry", mock_schedule),
-        patch.object(orch, "_ensure_linear_client", return_value=mock_client),
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
         patch("stokowski.orchestrator.asyncio.create_task", side_effect=capture_create_task),
     ):
         orch._on_worker_exit(issue, attempt)
