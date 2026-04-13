@@ -46,3 +46,37 @@ def test_parse_latest_gate_waiting_finds_waiting_when_latest_tracking_is_state()
 def test_parse_latest_gate_waiting_none_when_no_waiting():
     c1 = {"body": make_gate_comment("human", "approved", workflow="wf")}
     assert parse_latest_gate_waiting([c1]) is None
+
+
+def test_parse_latest_gate_waiting_newest_by_payload_timestamp_not_list_order():
+    """API may return newest-first; must pick waiting gate with latest JSON timestamp."""
+    older = (
+        '<!-- stokowski:gate {"state": "research-review", "status": "waiting", '
+        '"run": 1, "timestamp": "2026-04-01T10:00:00+00:00", "workflow": "feature"} -->'
+    )
+    newer = (
+        '<!-- stokowski:gate {"state": "merge-review", "status": "waiting", '
+        '"run": 2, "timestamp": "2026-04-12T21:20:50.329669+00:00", "workflow": "feature"} -->'
+    )
+    # Newest-first (wrong for legacy "last in list wins")
+    comments = [
+        {"body": newer, "createdAt": "2026-04-12T21:20:51.000Z"},
+        {"body": older, "createdAt": "2026-04-01T10:00:01.000Z"},
+    ]
+    got = parse_latest_gate_waiting(comments)
+    assert got is not None
+    assert got["state"] == "merge-review"
+    assert got["status"] == "waiting"
+
+
+def test_parse_latest_gate_waiting_prefers_created_at_when_payload_timestamp_missing():
+    """Fallback when gate JSON has no timestamp: use Linear createdAt."""
+    body_old = '<!-- stokowski:gate {"state": "g-old", "status": "waiting", "run": 1} -->'
+    body_new = '<!-- stokowski:gate {"state": "g-new", "status": "waiting", "run": 1} -->'
+    comments = [
+        {"body": body_new, "createdAt": "2026-04-13T12:00:00.000Z"},
+        {"body": body_old, "createdAt": "2026-04-10T08:00:00.000Z"},
+    ]
+    got = parse_latest_gate_waiting(comments)
+    assert got is not None
+    assert got["state"] == "g-new"

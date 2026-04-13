@@ -74,48 +74,93 @@ def make_gate_comment(
 
 
 def parse_latest_tracking(comments: list[dict]) -> dict[str, Any] | None:
-    """Parse comments (oldest-first) to find the latest state or gate tracking entry.
+    """Return the most recent state or gate tracking entry.
 
-    Returns a dict with keys:
-        - "type": "state" or "gate"
-        - Plus all fields from the JSON payload
+    Picks the candidate with the latest effective time: ``timestamp`` in the
+    JSON payload (preferred), else the comment's ``createdAt``. Order of
+    comments in the API response does not matter.
 
-    Returns None if no tracking comments found.
+    If no candidate has a parseable time, falls back to the last marker in
+    scan order (state, then gate, per comment — same as legacy).
+
+    Returns a dict with ``type`` ``"state"`` or ``"gate"`` plus JSON fields,
+    or None if no tracking markers found.
     """
-    latest: dict[str, Any] | None = None
+    entries = _collect_tracking_entries(comments)
+    if not entries:
+        return None
+
+    best: tuple[datetime, dict[str, Any]] | None = None
+    for eff, row, _comment in entries:
+        if eff is None:
+            continue
+        if best is None or eff > best[0]:
+            best = (eff, row)
+
+    if best is not None:
+        return best[1]
+
+    return entries[-1][1]
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    with contextlib.suppress(ValueError, AttributeError):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return None
+
+
+def _tracking_payload_effective_time(comment: dict[str, Any], payload: dict[str, Any]) -> datetime | None:
+    """JSON ``timestamp`` preferred, else Linear ``createdAt`` on the comment."""
+    return _parse_iso_datetime(payload.get("timestamp")) or _parse_iso_datetime(
+        comment.get("createdAt")
+    )
+
+
+def _collect_tracking_entries(
+    comments: list[dict],
+) -> list[tuple[datetime | None, dict[str, Any], dict[str, Any]]]:
+    """Each ``stokowski:state`` / ``stokowski:gate`` marker → (effective_time, row, comment)."""
+    entries: list[tuple[datetime | None, dict[str, Any], dict[str, Any]]] = []
 
     for comment in comments:
         body = comment.get("body", "")
 
         state_match = STATE_PATTERN.search(body)
         if state_match:
-            try:
-                data = json.loads(state_match.group(1))
-                data["type"] = "state"
-                latest = data
-            except json.JSONDecodeError:
-                pass
+            with contextlib.suppress(json.JSONDecodeError):
+                raw = json.loads(state_match.group(1))
+                row = dict(raw)
+                row["type"] = "state"
+                eff = _tracking_payload_effective_time(comment, raw)
+                entries.append((eff, row, comment))
 
         gate_match = GATE_PATTERN.search(body)
         if gate_match:
-            try:
-                data = json.loads(gate_match.group(1))
-                data["type"] = "gate"
-                latest = data
-            except json.JSONDecodeError:
-                pass
+            with contextlib.suppress(json.JSONDecodeError):
+                raw = json.loads(gate_match.group(1))
+                row = dict(raw)
+                row["type"] = "gate"
+                eff = _tracking_payload_effective_time(comment, raw)
+                entries.append((eff, row, comment))
 
-    return latest
+    return entries
 
 
 def parse_latest_gate_waiting(comments: list[dict]) -> dict[str, Any] | None:
     """Return the most recent gate tracking payload with status "waiting".
 
-    Comments are expected oldest-first (Linear order). Later comments win so
-    the result is the chronologically last *waiting* gate, not the last gate
-    comment of any status (e.g. approved after waiting).
+    Chooses the candidate with the latest effective time: ``timestamp`` in the
+    gate JSON (preferred), else the comment's ``createdAt``. This is correct
+    regardless of whether the API returns comments oldest-first or newest-first.
+
+    If no candidate has a parseable time, falls back to the last waiting gate
+    in list order (legacy behavior).
     """
-    latest_waiting: dict[str, Any] | None = None
+    best_time: datetime | None = None
+    best_payload: dict[str, Any] | None = None
+    fallback: dict[str, Any] | None = None
 
     for comment in comments:
         body = comment.get("body", "")
@@ -128,30 +173,51 @@ def parse_latest_gate_waiting(comments: list[dict]) -> dict[str, Any] | None:
             continue
         if data.get("status") != "waiting":
             continue
-        latest_waiting = dict(data)
-        latest_waiting["type"] = "gate"
+        row = dict(data)
+        row["type"] = "gate"
+        fallback = row
 
-    return latest_waiting
+        effective = _tracking_payload_effective_time(comment, data)
+        if effective is None:
+            continue
+        if best_time is None or effective > best_time:
+            best_time = effective
+            best_payload = row
+
+    if best_payload is not None:
+        return best_payload
+    return fallback
 
 
 def get_last_tracking_timestamp(comments: list[dict]) -> str | None:
-    """Find the timestamp of the latest tracking comment."""
-    latest_ts: str | None = None
+    """ISO timestamp string for the same tracking entry as :func:`parse_latest_tracking`.
 
-    for comment in comments:
-        body = comment.get("body", "")
-        for pattern in (STATE_PATTERN, GATE_PATTERN):
-            match = pattern.search(body)
-            if match:
-                try:
-                    data = json.loads(match.group(1))
-                    ts = data.get("timestamp")
-                    if ts:
-                        latest_ts = ts
-                except json.JSONDecodeError:
-                    pass
+    Prefers the payload's ``timestamp`` field; if missing, returns the
+    comment's ``createdAt`` string for that entry.
+    """
+    entries = _collect_tracking_entries(comments)
+    if not entries:
+        return None
 
-    return latest_ts
+    best: tuple[datetime, dict[str, Any], dict[str, Any]] | None = None
+    for eff, row, comment in entries:
+        if eff is None:
+            continue
+        if best is None or eff > best[0]:
+            best = (eff, row, comment)
+
+    if best is not None:
+        _, row, comment = best
+    else:
+        row, comment = entries[-1][1], entries[-1][2]
+
+    ts = row.get("timestamp")
+    if isinstance(ts, str) and ts.strip():
+        return ts
+    created = comment.get("createdAt")
+    if isinstance(created, str) and created.strip():
+        return created
+    return None
 
 
 def get_comments_since(comments: list[dict], since_timestamp: str | None) -> list[dict]:
