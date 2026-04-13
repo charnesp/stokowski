@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 from datetime import UTC, datetime
@@ -11,20 +13,31 @@ from .datetime_parse import parse_linear_iso_datetime
 
 logger = logging.getLogger("stokowski.tracking")
 
+# Marker prefix for BASE64-encoded tracking data
+STOKOWSKI64_PREFIX = "stokowski64:"
+
+
+def _encode_marker(payload: dict[str, Any]) -> str:
+    """Encode a payload as BASE64 stokowski64 marker."""
+    json_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    b64 = base64.standard_b64encode(json_bytes).decode("ascii")
+    return f"{STOKOWSKI64_PREFIX}{b64}"
+
 
 def make_state_comment(state: str, run: int = 1, workflow: str | None = None) -> str:
-    """Build a structured state-tracking comment."""
+    """Build a structured state-tracking comment with BASE64 marker at end."""
     payload: dict[str, Any] = {
+        "type": "state",
         "state": state,
         "run": run,
         "timestamp": datetime.now(UTC).isoformat(),
     }
     if workflow:
         payload["workflow"] = workflow
-    machine = f"<!-- stokowski:state {json.dumps(payload)} -->"
+    machine = _encode_marker(payload)
     wf_info = f" [{workflow}]" if workflow else ""
     human = f"**[Stokowski]** Entering state: **{state}**{wf_info} (run {run})"
-    return f"{machine}\n\n{human}"
+    return f"{human}\n\n{machine}"
 
 
 def make_gate_comment(
@@ -35,8 +48,9 @@ def make_gate_comment(
     run: int = 1,
     workflow: str | None = None,
 ) -> str:
-    """Build a structured gate-tracking comment."""
+    """Build a structured gate-tracking comment with BASE64 marker at end."""
     payload: dict[str, Any] = {
+        "type": "gate",
         "state": state,
         "status": status,
         "run": run,
@@ -47,7 +61,7 @@ def make_gate_comment(
     if workflow:
         payload["workflow"] = workflow
 
-    machine = f"<!-- stokowski:gate {json.dumps(payload)} -->"
+    machine = _encode_marker(payload)
 
     if status == "waiting":
         human = f"**[Stokowski]** Awaiting human review: **{state}**"
@@ -67,7 +81,7 @@ def make_gate_comment(
     else:
         human = f"**[Stokowski]** Gate **{state}** status: {status}"
 
-    return f"{machine}\n\n{human}"
+    return f"{human}\n\n{machine}"
 
 
 def parse_latest_tracking(comments: list[dict]) -> dict[str, Any] | None:
@@ -150,9 +164,18 @@ def _skip_stokowski_html_close(body: str, after_json: int) -> int | None:
 
 
 def _iter_stokowski_marker_json(body: str, marker: str) -> list[tuple[int, str]]:
-    """``marker`` is ``state`` or ``gate``. Each hit: ``(start_offset, json_str)``."""
-    prefix = f"<!-- stokowski:{marker} "
+    """``marker`` is ``state`` or ``gate``. Each hit: ``(start_offset, json_str)``.
+
+    Supports both legacy HTML comment format (<!-- stokowski:TYPE {...} -->)
+    and new BASE64 format (stokowski64:...).
+    """
+    # First try the new BASE64 format - filter by type embedded in JSON
     out: list[tuple[int, str]] = []
+    for pos, json_str in _iter_stokowski64_markers(body, marker_type=marker):
+        out.append((pos, json_str))
+
+    # Then try legacy HTML comment format
+    prefix = f"<!-- stokowski:{marker} "
     pos = 0
     plen = len(prefix)
     while pos <= len(body) - plen:
@@ -180,6 +203,47 @@ def _iter_stokowski_marker_json(body: str, marker: str) -> list[tuple[int, str]]
     return out
 
 
+def _iter_stokowski64_markers(body: str, marker_type: str | None = None) -> list[tuple[int, str]]:
+    """Find all stokowski64: markers in body. Returns list of (start_offset, json_str).
+
+    Args:
+        body: The comment body to search.
+        marker_type: Optional type to filter by ("state", "gate", "report", "route_error").
+                    If None, returns all markers.
+    """
+    out: list[tuple[int, str]] = []
+    pos = 0
+    prefix_len = len(STOKOWSKI64_PREFIX)
+
+    while pos <= len(body) - prefix_len:
+        i = body.find(STOKOWSKI64_PREFIX, pos)
+        if i == -1:
+            break
+
+        # Extract the BASE64 data after the prefix
+        b64_start = i + prefix_len
+        # Find end of BASE64 data (whitespace or end of string)
+        b64_end = b64_start
+        while b64_end < len(body) and body[b64_end] not in " \t\n\r":
+            b64_end += 1
+
+        b64_data = body[b64_start:b64_end]
+        if b64_data:
+            try:
+                json_bytes = base64.standard_b64decode(b64_data)
+                json_str = json_bytes.decode("utf-8")
+                # Validate it's valid JSON and check type if specified
+                payload = json.loads(json_str)
+                if marker_type is None or payload.get("type") == marker_type:
+                    out.append((i, json_str))
+            except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as e:
+                logger.debug("Invalid stokowski64 marker at offset %s: %s", i, e)
+
+        pos = b64_end if b64_end > b64_start else i + prefix_len
+
+    return out
+
+
 def _tracking_payload_effective_time(
     comment: dict[str, Any], payload: dict[str, Any]
 ) -> datetime | None:
@@ -198,13 +262,18 @@ def _tracking_payload_effective_time(
 def _resolve_best_tracking_row(
     entries: list[tuple[datetime | None, dict[str, Any], dict[str, Any]]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return ``(row, source_comment)`` for the latest effective time, or last entry if none parse."""
-    best: tuple[datetime, dict[str, Any], dict[str, Any]] | None = None
-    for eff, row, comment in entries:
+    """Return ``(row, source_comment)`` for the latest effective time, or last entry if none parse.
+
+    When multiple entries have the same effective time, the last one in the list wins.
+    """
+    best: tuple[datetime, dict[str, Any], dict[str, Any], int] | None = None
+    for idx, (eff, row, comment) in enumerate(entries):
         if eff is None:
             continue
-        if best is None or eff >= best[0]:
-            best = (eff, row, comment)
+        # Tie-breaking: last entry wins. We use > (not >=) to ensure last wins
+        # but include index in comparison to avoid dict comparison.
+        if best is None or eff > best[0] or (eff == best[0] and idx > best[3]):
+            best = (eff, row, comment, idx)
     if best is not None:
         return best[1], best[2]
     return entries[-1][1], entries[-1][2]
@@ -286,7 +355,9 @@ def get_last_tracking_timestamp(comments: list[dict]) -> str | None:
 
 
 def _comment_body_is_stokowski_tracking(body: str) -> bool:
-    return "<!-- stokowski:" in body.casefold()
+    """Check if body contains any stokowski tracking markers (legacy or BASE64)."""
+    body_lower = body.casefold()
+    return "<!-- stokowski:" in body_lower or "stokowski64:" in body_lower
 
 
 def get_comments_since(comments: list[dict], since_timestamp: str | None) -> list[dict]:
