@@ -8,8 +8,10 @@ from stokowski.config import LinearStatesConfig, PromptsConfig, ServiceConfig, S
 from stokowski.models import Issue
 from stokowski.prompt import (
     assemble_prompt,
+    build_image_references,
     build_lifecycle_context,
     build_lifecycle_section,
+    embed_images_in_prompt,
     load_prompt_file,
     render_template,
 )
@@ -393,3 +395,243 @@ class TestAssemblePrompt:
                 state_cfg=state_cfg,
                 workflow_states={},
             )
+
+
+class TestEmbedImagesInPrompt:
+    """Tests for embed_images_in_prompt function."""
+
+    def test_empty_comments_returns_empty(self):
+        """Empty comments list returns empty string."""
+        result = embed_images_in_prompt([])
+        assert result == ""
+
+    def test_comments_without_images_returns_empty(self):
+        """Comments without downloaded_images return empty string."""
+        comments = [{"id": "c1", "body": "No images"}]
+        result = embed_images_in_prompt(comments)
+        assert result == ""
+
+    def test_embeds_single_image(self, tmp_path: Path):
+        """Single image is embedded as base64 markdown."""
+        # Create a test image file
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+        img_file = img_dir / "test.png"
+        img_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"fake image data")
+
+        comments = [
+            {
+                "id": "c1",
+                "body": "With image",
+                "downloaded_images": [
+                    {
+                        "path": str(img_file),
+                        "title": "screenshot.png",
+                        "mime_type": "image/png",
+                    }
+                ],
+            }
+        ]
+
+        result = embed_images_in_prompt(comments)
+
+        assert "![screenshot.png]" in result
+        assert "data:image/png;base64," in result
+        # Should contain base64 encoded content
+        assert "iVBOR" in result or "data:image/png;base64," in result
+
+    def test_respects_max_images_per_comment(self, tmp_path: Path):
+        """max_images_per_comment limit is respected."""
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+
+        images = []
+        for i in range(5):
+            img_file = img_dir / f"image{i}.png"
+            img_file.write_bytes(b"\x89PNG\r\n\x1a\n" + f"data{i}".encode())
+            images.append(
+                {
+                    "path": str(img_file),
+                    "title": f"image{i}.png",
+                    "mime_type": "image/png",
+                }
+            )
+
+        comments = [{"id": "c1", "body": "Many images", "downloaded_images": images}]
+
+        result = embed_images_in_prompt(comments, max_images_per_comment=2)
+
+        # Should only have 2 image references
+        assert result.count("![") == 2
+
+    def test_respects_max_total_images(self, tmp_path: Path):
+        """max_total_images limit is respected across comments."""
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+
+        comments = []
+        for c in range(3):
+            images = []
+            for i in range(3):
+                img_file = img_dir / f"c{c}_i{i}.png"
+                img_file.write_bytes(b"\x89PNG\r\n\x1a\n" + f"c{c}i{i}".encode())
+                images.append(
+                    {
+                        "path": str(img_file),
+                        "title": f"image{i}.png",
+                        "mime_type": "image/png",
+                    }
+                )
+            comments.append({"id": f"c{c}", "body": f"Comment {c}", "downloaded_images": images})
+
+        result = embed_images_in_prompt(comments, max_total_images=5)
+
+        # Should only have 5 images total (not 9)
+        assert result.count("![") == 5
+
+    def test_skips_missing_files(self, tmp_path: Path, caplog):
+        """Missing image files are skipped with warning."""
+        import logging
+
+        comments = [
+            {
+                "id": "c1",
+                "body": "Missing image",
+                "downloaded_images": [
+                    {
+                        "path": str(tmp_path / "nonexistent.png"),
+                        "title": "missing.png",
+                        "mime_type": "image/png",
+                    }
+                ],
+            }
+        ]
+
+        with caplog.at_level(logging.WARNING):
+            result = embed_images_in_prompt(comments)
+
+        assert result == ""
+        assert "not found" in caplog.text
+
+    def test_uses_filename_when_no_title(self, tmp_path: Path):
+        """Filename is used when title is missing."""
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+        img_file = img_dir / "unnamed.png"
+        img_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"data")
+
+        comments = [
+            {
+                "id": "c1",
+                "body": "Image",
+                "downloaded_images": [
+                    {"path": str(img_file), "mime_type": "image/png"}  # No title
+                ],
+            }
+        ]
+
+        result = embed_images_in_prompt(comments)
+
+        assert "![unnamed.png]" in result
+
+
+class TestBuildImageReferences:
+    """Tests for build_image_references function."""
+
+    def test_empty_comments_returns_empty(self):
+        """Empty comments return empty list."""
+        result = build_image_references([])
+        assert result == []
+
+    def test_builds_references_from_comments(self):
+        """Image references built correctly from comments."""
+        comments = [
+            {
+                "id": "c1",
+                "body": "Comment 1",
+                "downloaded_images": [
+                    {"path": "/path/img1.png", "title": "Image 1"},
+                    {"path": "/path/img2.png", "title": "Image 2"},
+                ],
+            },
+            {
+                "id": "c2",
+                "body": "Comment 2",
+                "downloaded_images": [{"path": "/path/img3.png", "title": "Image 3"}],
+            },
+        ]
+
+        result = build_image_references(comments)
+
+        assert len(result) == 3
+        assert result[0]["path"] == "/path/img1.png"
+        assert result[0]["title"] == "Image 1"
+        assert result[0]["comment_id"] == "c1"
+        assert result[2]["comment_id"] == "c2"
+
+    def test_skips_comments_without_images(self):
+        """Comments without images are skipped."""
+        comments = [
+            {"id": "c1", "body": "No images"},
+            {
+                "id": "c2",
+                "body": "Has image",
+                "downloaded_images": [{"path": "/path/img.png", "title": "Image"}],
+            },
+        ]
+
+        result = build_image_references(comments)
+
+        assert len(result) == 1
+        assert result[0]["comment_id"] == "c2"
+
+
+class TestLifecycleContextImages:
+    """Tests for image support in lifecycle context."""
+
+    def test_has_images_false_when_no_images(self):
+        """has_images is False when comments have no images."""
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+
+        context = build_lifecycle_context(
+            issue=issue,
+            state_name="implement",
+            state_cfg=StateConfig(name="implement", type="agent"),
+            linear_states=LinearStatesConfig(),
+            recent_comments=[{"id": "c1", "body": "No images"}],
+        )
+
+        assert context["has_images"] is False
+        assert context["image_references"] == []
+
+    def test_has_images_true_when_images_present(self, tmp_path: Path):
+        """has_images is True when comments have downloaded_images."""
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+
+        context = build_lifecycle_context(
+            issue=issue,
+            state_name="implement",
+            state_cfg=StateConfig(name="implement", type="agent"),
+            linear_states=LinearStatesConfig(),
+            recent_comments=[
+                {
+                    "id": "c1",
+                    "body": "With image",
+                    "downloaded_images": [{"path": "/path/img.png", "title": "Image"}],
+                }
+            ],
+        )
+
+        assert context["has_images"] is True
+        assert len(context["image_references"]) == 1
+        assert context["image_references"][0]["title"] == "Image"

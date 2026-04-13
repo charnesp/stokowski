@@ -122,8 +122,17 @@ class Orchestrator:
             self._tracker = self.cfg.create_tracker_client()
         return self._tracker
 
-    async def _load_issue_comments(self, client: TrackerClient, issue: Issue) -> list[dict]:
+    async def _load_issue_comments(
+        self, client: TrackerClient, issue: Issue, workspace_path: Path | None = None
+    ) -> list[dict]:
         """Fetch issue comments; warn when history may be truncated.
+
+        For LinearClient, also downloads image attachments to the workspace.
+
+        Args:
+            client: The tracker client to fetch comments from
+            issue: The issue being processed
+            workspace_path: The workspace path for downloading images (optional)
 
         Raises:
             CommentsFetchError: The first page of comments could not be loaded.
@@ -134,7 +143,13 @@ class Orchestrator:
                 "Partial comment history for %s; tracking and workflow resolution may be stale",
                 issue.identifier,
             )
-        return result.nodes
+        comments = result.nodes
+
+        # Download images from attachments for LinearClient
+        if workspace_path and isinstance(client, LinearClient):
+            comments = await client.download_comment_images(comments, issue, workspace_path)
+
+        return comments
 
     async def start(self):
         """Start the orchestration loop."""
@@ -1213,7 +1228,7 @@ class Orchestrator:
                     return
 
             prompt = await self._render_prompt_async(
-                issue, attempt.attempt, state_name, workflow, attempt.previous_error
+                issue, attempt.attempt, state_name, workflow, attempt.previous_error, ws.path
             )
 
             # Build env vars for the agent subprocess from workflow.yaml config
@@ -1303,6 +1318,7 @@ class Orchestrator:
         state_name: str | None = None,
         workflow: WorkflowConfig | None = None,
         previous_error: str | None = None,
+        workspace_path: Path | None = None,
     ) -> str:
         """Render prompt using state machine prompt assembly (async — fetches comments)."""
         # Get workflow if not provided
@@ -1324,11 +1340,11 @@ class Orchestrator:
             last_completed = self._last_completed_at.get(issue.id)
             last_run_at = last_completed.isoformat() if last_completed else None
 
-            # Fetch comments for lifecycle context
+            # Fetch comments for lifecycle context (with image downloads if workspace_path provided)
             comments: list[dict] | None = None
             try:
                 client = self._ensure_tracker_client()
-                comments = await self._load_issue_comments(client, issue)
+                comments = await self._load_issue_comments(client, issue, workspace_path)
             except Exception as e:
                 logger.warning(f"Failed to fetch comments for prompt: {e}")
 
