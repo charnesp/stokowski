@@ -452,3 +452,204 @@ class TestAssemblePrompt:
 
         assert "[human feedback 1]" in result
         assert "[human feedback 2]" in result
+
+    def test_rework_resumed_session_omits_stage_prompt(self, tmp_path):
+        """Resumed rework keeps lifecycle but skips static global/stage content."""
+        workflow_dir = tmp_path / "workflow"
+        workflow_dir.mkdir()
+        prompts_dir = workflow_dir / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "global.md").write_text("GLOBAL")
+        (prompts_dir / "lifecycle.md").write_text("LIFECYCLE")
+        (prompts_dir / "stage.md").write_text("STAGE")
+
+        cfg = ServiceConfig(
+            prompts=PromptsConfig(
+                global_prompt="prompts/global.md",
+                lifecycle_prompt="prompts/lifecycle.md",
+            )
+        )
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+        state_cfg = StateConfig(name="implement", type="agent", prompt="prompts/stage.md")
+
+        result = assemble_prompt(
+            cfg=cfg,
+            workflow_dir=str(workflow_dir),
+            issue=issue,
+            state_name="implement",
+            state_cfg=state_cfg,
+            workflow_states={},
+            is_rework=True,
+            is_resumed_session=True,
+        )
+
+        assert "GLOBAL" not in result
+        assert "LIFECYCLE" in result
+        assert "STAGE" not in result
+
+    def test_rework_fresh_session_keeps_stage_prompt(self, tmp_path):
+        """Fresh rework sessions include global and stage instructions."""
+        workflow_dir = tmp_path / "workflow"
+        workflow_dir.mkdir()
+        prompts_dir = workflow_dir / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "global.md").write_text("GLOBAL")
+        (prompts_dir / "lifecycle.md").write_text("LIFECYCLE")
+        (prompts_dir / "stage.md").write_text("STAGE")
+
+        cfg = ServiceConfig(
+            prompts=PromptsConfig(
+                global_prompt="prompts/global.md",
+                lifecycle_prompt="prompts/lifecycle.md",
+            )
+        )
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+        state_cfg = StateConfig(name="implement", type="agent", prompt="prompts/stage.md")
+
+        result = assemble_prompt(
+            cfg=cfg,
+            workflow_dir=str(workflow_dir),
+            issue=issue,
+            state_name="implement",
+            state_cfg=state_cfg,
+            workflow_states={},
+            is_rework=True,
+            is_resumed_session=False,
+        )
+
+        assert "GLOBAL" in result
+        assert "LIFECYCLE" in result
+        assert "STAGE" in result
+
+    def test_non_rework_resumed_session_omits_global_and_stage_prompt(self, tmp_path):
+        """Resumed sessions skip static prompts even on non-rework turns."""
+        workflow_dir = tmp_path / "workflow"
+        workflow_dir.mkdir()
+        prompts_dir = workflow_dir / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "global.md").write_text("GLOBAL")
+        (prompts_dir / "lifecycle.md").write_text("LIFECYCLE")
+        (prompts_dir / "stage.md").write_text("STAGE")
+
+        cfg = ServiceConfig(
+            prompts=PromptsConfig(
+                global_prompt="prompts/global.md",
+                lifecycle_prompt="prompts/lifecycle.md",
+            )
+        )
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+        state_cfg = StateConfig(name="implement", type="agent", prompt="prompts/stage.md")
+
+        result = assemble_prompt(
+            cfg=cfg,
+            workflow_dir=str(workflow_dir),
+            issue=issue,
+            state_name="implement",
+            state_cfg=state_cfg,
+            workflow_states={},
+            is_rework=False,
+            is_resumed_session=True,
+        )
+
+        assert "GLOBAL" not in result
+        assert "LIFECYCLE" in result
+        assert "STAGE" not in result
+
+    def test_resumed_session_can_include_stage_for_new_stage(self, tmp_path):
+        """Resume can include stage prompt for a newly entered stage."""
+        workflow_dir = tmp_path / "workflow"
+        workflow_dir.mkdir()
+        prompts_dir = workflow_dir / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "global.md").write_text("GLOBAL")
+        (prompts_dir / "lifecycle.md").write_text("LIFECYCLE")
+        (prompts_dir / "stage.md").write_text("STAGE")
+
+        cfg = ServiceConfig(
+            prompts=PromptsConfig(
+                global_prompt="prompts/global.md",
+                lifecycle_prompt="prompts/lifecycle.md",
+            )
+        )
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+        state_cfg = StateConfig(name="implement", type="agent", prompt="prompts/stage.md")
+
+        result = assemble_prompt(
+            cfg=cfg,
+            workflow_dir=str(workflow_dir),
+            issue=issue,
+            state_name="implement",
+            state_cfg=state_cfg,
+            workflow_states={},
+            is_rework=False,
+            is_resumed_session=True,
+            include_stage_prompt_on_resume=True,
+        )
+
+        assert "GLOBAL" not in result
+        assert "LIFECYCLE" in result
+        assert "STAGE" in result
+
+    def test_stage_template_receives_is_rework_context(self, tmp_path):
+        """Stage template Jinja branches use current rework status."""
+        workflow_dir = tmp_path / "workflow"
+        workflow_dir.mkdir()
+        prompts_dir = workflow_dir / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "lifecycle.md").write_text("LIFECYCLE")
+        (prompts_dir / "stage.md").write_text(
+            "{% if is_rework %}REWORK_STAGE{% else %}NORMAL_STAGE{% endif %}"
+        )
+
+        cfg = ServiceConfig(prompts=PromptsConfig(lifecycle_prompt="prompts/lifecycle.md"))
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+        state_cfg = StateConfig(name="implement", type="agent", prompt="prompts/stage.md")
+
+        rework = assemble_prompt(
+            cfg=cfg,
+            workflow_dir=str(workflow_dir),
+            issue=issue,
+            state_name="implement",
+            state_cfg=state_cfg,
+            workflow_states={},
+            is_rework=True,
+        )
+        normal = assemble_prompt(
+            cfg=cfg,
+            workflow_dir=str(workflow_dir),
+            issue=issue,
+            state_name="implement",
+            state_cfg=state_cfg,
+            workflow_states={},
+            is_rework=False,
+        )
+
+        assert "REWORK_STAGE" in rework
+        assert "NORMAL_STAGE" not in rework
+        assert "NORMAL_STAGE" in normal
+        assert "REWORK_STAGE" not in normal

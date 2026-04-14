@@ -86,7 +86,8 @@ After this automated review, **`review-findings-route`** decides the next step. 
 
 ## Rework run
 
-If this is a rework run (the review stage is being re-run after changes):
+{% if is_rework %}
+This is a rework run (the review stage is being re-run after changes):
 
 1. Read your prior **`code-review`** **`<stokowski:report>`** (authoritative); use Linear comments only as a supplement.
 2. Read the new commits since your last review:
@@ -96,6 +97,7 @@ If this is a rework run (the review stage is being re-run after changes):
 3. Verify that previously raised issues have been addressed.
 4. Check for any new issues introduced by the rework.
 5. Post an updated `## Code Review` comment with your revised assessment.
+{% endif %}
 
 ## Do NOT
 

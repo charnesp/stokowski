@@ -68,6 +68,7 @@ class Orchestrator:
         self._retry_timers: dict[str, asyncio.TimerHandle] = {}
         self._child_pids: set[int] = set()  # Track claude subprocess PIDs
         self._last_session_ids: dict[str, str] = {}  # issue_id -> last known session_id
+        self._last_prompt_stage_by_issue: dict[str, tuple[str, str]] = {}
         self._jinja = Environment(undefined=StrictUndefined, autoescape=select_autoescape())
         self._running = False
         self._last_issues: dict[str, Issue] = {}
@@ -512,6 +513,7 @@ class Orchestrator:
 
         if release_agent_resources:
             self._last_session_ids.pop(issue.id, None)
+            self._last_prompt_stage_by_issue.pop(issue.id, None)
             self.claimed.discard(issue.id)
             self.completed.add(issue.id)
             try:
@@ -692,6 +694,7 @@ class Orchestrator:
             self._issue_state_runs.pop(issue.id, None)
             self._pending_gates.pop(issue.id, None)
             self._last_session_ids.pop(issue.id, None)
+            self._last_prompt_stage_by_issue.pop(issue.id, None)
             self._issue_workflow_cache.pop(issue.id, None)  # Clear workflow cache
             self.claimed.discard(issue.id)
             self.completed.add(issue.id)
@@ -1213,7 +1216,12 @@ class Orchestrator:
                     return
 
             prompt = await self._render_prompt_async(
-                issue, attempt.attempt, state_name, workflow, attempt.previous_error
+                issue,
+                attempt.attempt,
+                state_name,
+                workflow,
+                attempt.previous_error,
+                attempt.session_id,
             )
 
             # Build env vars for the agent subprocess from workflow.yaml config
@@ -1303,6 +1311,7 @@ class Orchestrator:
         state_name: str | None = None,
         workflow: WorkflowConfig | None = None,
         previous_error: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         """Render prompt using state machine prompt assembly (async — fetches comments)."""
         # Get workflow if not provided
@@ -1323,6 +1332,12 @@ class Orchestrator:
             run = self._issue_state_runs.get(issue.id, 1)
             last_completed = self._last_completed_at.get(issue.id)
             last_run_at = last_completed.isoformat() if last_completed else None
+            include_stage_prompt_on_resume = False
+            if session_id:
+                prev = self._last_prompt_stage_by_issue.get(issue.id)
+                include_stage_prompt_on_resume = (
+                    prev is None or prev[0] != session_id or prev[1] != state_name
+                )
 
             # Fetch comments for lifecycle context
             comments: list[dict] | None = None
@@ -1345,7 +1360,7 @@ class Orchestrator:
             except Exception as e:
                 logger.warning(f"Failed to fetch comments for prompt: {e}")
 
-            return assemble_prompt(
+            prompt = assemble_prompt(
                 cfg=self.cfg,
                 workflow_dir=str(self.workflow_path.parent),
                 issue=issue,
@@ -1355,11 +1370,16 @@ class Orchestrator:
                 workflow_prompts=workflow_prompts,
                 run=run,
                 is_rework=is_rework,
+                is_resumed_session=bool(session_id),
+                include_stage_prompt_on_resume=include_stage_prompt_on_resume,
                 attempt=attempt_num or 1,
                 last_run_at=last_run_at,
                 comments=comments,
                 previous_error=previous_error,
             )
+            if session_id:
+                self._last_prompt_stage_by_issue[issue.id] = (session_id, state_name)
+            return prompt
 
         # Legacy fallback
         return self._render_prompt(issue, attempt_num, state_name, workflow)
@@ -1404,6 +1424,8 @@ class Orchestrator:
                 workflow_prompts=workflow_prompts,
                 run=run,
                 is_rework=False,
+                is_resumed_session=False,
+                include_stage_prompt_on_resume=False,
                 attempt=attempt_num or 1,
                 last_run_at=last_run_at,
                 comments=None,
@@ -1730,6 +1752,7 @@ class Orchestrator:
                     error=attempt.error,
                 )
         else:
+            self._last_prompt_stage_by_issue.pop(issue.id, None)
             self.claimed.discard(issue.id)
 
     def _schedule_retry(

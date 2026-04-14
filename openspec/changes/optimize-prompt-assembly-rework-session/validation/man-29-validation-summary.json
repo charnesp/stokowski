@@ -1,0 +1,17 @@
+{
+  "issue": "MAN-29",
+  "workflow": "feature",
+  "state_for_snapshot": "investigate",
+  "comments_count": 12,
+  "non_rework_prompt_chars": 15875,
+  "rework_resumed_prompt_chars": 2497,
+  "global_present_non_rework": true,
+  "global_present_rework_resumed": false,
+  "stage_present_non_rework": true,
+  "stage_present_rework_resumed": false,
+  "validation_passed": true,
+  "artifacts": {
+    "non_rework": "/Users/charles/Sandbox/stokowski/openspec/changes/optimize-prompt-assembly-rework-session/validation/man-29-non-rework.prompt.md",
+    "rework_resumed": "/Users/charles/Sandbox/stokowski/openspec/changes/optimize-prompt-assembly-rework-session/validation/man-29-rework-resumed.prompt.md"
+  }
+}
