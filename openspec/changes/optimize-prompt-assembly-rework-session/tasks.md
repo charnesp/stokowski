@@ -23,7 +23,4 @@
 - [x] 4.3 Document behavior changes in change artifacts and confirm `/opsx:apply` readiness.
 
 Notes:
-- MAN-29 replay snapshots generated from live Linear data:
-  - `openspec/changes/optimize-prompt-assembly-rework-session/validation/man-29-non-rework.prompt.md`
-  - `openspec/changes/optimize-prompt-assembly-rework-session/validation/man-29-rework-resumed.prompt.md`
-  - `openspec/changes/optimize-prompt-assembly-rework-session/validation/man-29-validation-summary.json`
+- MAN-29 replay snapshots were generated from live Linear data during verification, then removed from version control.

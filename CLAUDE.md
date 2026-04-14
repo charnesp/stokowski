@@ -65,7 +65,7 @@ Each workflow defines a set of internal states that map to Linear states. States
 
 **Agent-gate:** Same runner stack and `prompt:` as `agent`. YAML requires `transitions` (named keys → target states), plus `default_transition` naming one of those keys whose **target** must be `type: gate` (human validation when routing fails). After success, Stokowski parses `<<<STOKOWSKI_ROUTE>>>` / `{"transition":"<key>"}` / `<<<END_STOKOWSKI_ROUTE>>>` from the runner output and calls `_safe_transition` with that key; it posts `<stokowski:report>` like a normal agent state. If parsing fails, it posts a `route-error` comment and uses `default_transition`. See `prompts/lifecycle.md` and `workflow.example.yaml`.
 
-**Three-layer prompt assembly:** Every agent turn's prompt is built from three layers concatenated together:
+**Three-layer prompt assembly:** Prompt composition is session-aware. Fresh turns include all three layers; resumed turns always include lifecycle and may include stage only when entering a new stage in the resumed session:
 1. **Global prompt** — shared context loaded from a `.md` file (referenced by `prompts.global_prompt`)
 2. **Stage prompt** — state-specific instructions loaded from the state's `prompt` path
 3. **Lifecycle injection** — auto-generated section with issue metadata, transitions, rework context, and recent comments
@@ -236,7 +236,7 @@ Three-layer prompt assembly for state machine workflows. Main entry point is `as
 
 **`build_lifecycle_section()`** generates the auto-injected lifecycle section appended to every prompt. Includes issue metadata, rework context with review comments, recent activity, available transitions, and completion instructions. Clearly demarcated with HTML comments.
 
-**`assemble_prompt()`** orchestrates the three layers: loads and renders global prompt, loads and renders stage prompt, generates lifecycle section, joins with double newlines.
+**`assemble_prompt()`** applies session-aware composition rules: global/stage/lifecycle on fresh turns; lifecycle-only on resumed same-stage turns; stage+lifecycle on resumed new-stage turns (global stays omitted on resume).
 
 ### tracking.py
 State machine tracking via structured Linear comments:
@@ -258,7 +258,7 @@ workflow.yaml parsed → states + config loaded
         → RunAttempt created in self.running
         → _run_worker() task spawned
             → ensure_workspace() → after_create hook (git clone, npm install, etc.)
-            → assemble_prompt() → 3 layers: global + stage + lifecycle
+            → assemble_prompt() → session-aware layering (fresh: global+stage+lifecycle; resumed same-stage: lifecycle only; resumed new-stage: stage+lifecycle)
             → run_agent_turn() called in loop (up to max_turns)
                 → build_claude_args() → claude -p subprocess
                 → NDJSON streamed: tool_use events, assistant messages, result

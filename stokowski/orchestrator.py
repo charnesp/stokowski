@@ -68,6 +68,8 @@ class Orchestrator:
         self._retry_timers: dict[str, asyncio.TimerHandle] = {}
         self._child_pids: set[int] = set()  # Track claude subprocess PIDs
         self._last_session_ids: dict[str, str] = {}  # issue_id -> last known session_id
+        # issue_id -> (session_id, stage_name): include stage once on next resumed
+        # render for explicit stage changes only.
         self._last_prompt_stage_by_issue: dict[str, tuple[str, str]] = {}
         self._jinja = Environment(undefined=StrictUndefined, autoescape=select_autoescape())
         self._running = False
@@ -706,6 +708,12 @@ class Orchestrator:
         else:
             # Agent state — post state comment, ensure active Linear state, schedule retry
             self._issue_current_state[issue.id] = target_name
+            if target_cfg.session == "inherit":
+                sid = self._last_session_ids.get(issue.id)
+                if sid:
+                    self._last_prompt_stage_by_issue[issue.id] = (sid, target_name)
+            else:
+                self._last_prompt_stage_by_issue.pop(issue.id, None)
             client = self._ensure_tracker_client()
             comment = make_state_comment(
                 state=target_name,
@@ -814,6 +822,13 @@ class Orchestrator:
                 await client.post_comment(issue.id, comment)
 
                 self._issue_current_state[issue.id] = target
+                target_cfg = workflow_states.get(target)
+                if target_cfg and target_cfg.session == "inherit":
+                    sid = self._last_session_ids.get(issue.id)
+                    if sid:
+                        self._last_prompt_stage_by_issue[issue.id] = (sid, target)
+                else:
+                    self._last_prompt_stage_by_issue.pop(issue.id, None)
 
                 active_state = self.cfg.linear_states.active
                 moved = await client.update_issue_state(issue.id, active_state)
@@ -939,6 +954,13 @@ class Orchestrator:
                 await client.post_comment(issue.id, comment)
 
                 self._issue_current_state[issue.id] = rework_to
+                rework_cfg = workflow_states.get(rework_to)
+                if rework_cfg and rework_cfg.session == "inherit":
+                    sid = self._last_session_ids.get(issue.id)
+                    if sid:
+                        self._last_prompt_stage_by_issue[issue.id] = (sid, rework_to)
+                else:
+                    self._last_prompt_stage_by_issue.pop(issue.id, None)
 
                 active_state = self.cfg.linear_states.active
                 moved = await client.update_issue_state(issue.id, active_state)
@@ -1334,10 +1356,10 @@ class Orchestrator:
             last_run_at = last_completed.isoformat() if last_completed else None
             include_stage_prompt_on_resume = False
             if session_id:
-                prev = self._last_prompt_stage_by_issue.get(issue.id)
-                include_stage_prompt_on_resume = (
-                    prev is None or prev[0] != session_id or prev[1] != state_name
-                )
+                pending = self._last_prompt_stage_by_issue.get(issue.id)
+                include_stage_prompt_on_resume = pending == (session_id, state_name)
+                if include_stage_prompt_on_resume:
+                    self._last_prompt_stage_by_issue.pop(issue.id, None)
 
             # Fetch comments for lifecycle context
             comments: list[dict] | None = None
@@ -1377,8 +1399,6 @@ class Orchestrator:
                 comments=comments,
                 previous_error=previous_error,
             )
-            if session_id:
-                self._last_prompt_stage_by_issue[issue.id] = (session_id, state_name)
             return prompt
 
         # Legacy fallback
