@@ -1331,7 +1331,11 @@ class Orchestrator:
                 client = self._ensure_tracker_client()
                 comments = await self._load_issue_comments(client, issue)
                 tracking = parse_latest_tracking(comments)
-                if tracking and tracking.get("type") == "gate" and tracking.get("status") == "rework":
+                if (
+                    tracking
+                    and tracking.get("type") == "gate"
+                    and tracking.get("status") == "rework"
+                ):
                     rework_to = tracking.get("rework_to")
                     if not rework_to:
                         gate_state = tracking.get("state")
