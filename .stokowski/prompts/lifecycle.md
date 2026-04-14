@@ -91,6 +91,7 @@ Use a **transition key** from the list below (same keys as in **Transitions**). 
 ### Rework
 
 This is a **rework run**. A previous submission was reviewed and sent back for changes.
+If review comments are present below, they are the **primary source of truth** for why this was moved to rework and what must be fixed.
 
 {% if recent_comments %}
 **Review comments:**
@@ -103,7 +104,7 @@ This is a **rework run**. A previous submission was reviewed and sent back for c
 
 {% endfor %}
 {% endif %}
-Address the feedback above before resubmitting.
+Treat every review comment above as required acceptance criteria, then address all of them before resubmitting.
 
 {% elif recent_comments %}
 ### Recent Human Activity ** ⚠️ CAREFULLY READ THEM ALL ! **

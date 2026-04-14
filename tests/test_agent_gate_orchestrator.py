@@ -169,6 +169,161 @@ async def test_render_prompt_async_marks_rework_when_latest_gate_rework_targets_
 
 
 @pytest.mark.asyncio
+async def test_render_prompt_async_marks_resumed_rework_from_session_id(tmp_path):
+    """Rework prompt assembly gets resumed-session context when session id exists."""
+    orch = _orch(tmp_path, AG_GATE_YAML)
+    issue = _issue()
+    captured: dict[str, object] = {}
+    workflow = orch.cfg.workflows["default"]
+
+    comments = [
+        {
+            "id": "c1",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "body": make_gate_comment(
+                state="human",
+                status="rework",
+                rework_to="start",
+                run=2,
+                workflow="default",
+            ),
+        }
+    ]
+
+    def capture_assemble(*_a, **kw):
+        captured["is_rework"] = kw.get("is_rework")
+        captured["is_resumed_session"] = kw.get("is_resumed_session")
+        return "ok-prompt"
+
+    with (
+        patch.object(orch, "_load_issue_comments", AsyncMock(return_value=comments)),
+        patch("stokowski.orchestrator.assemble_prompt", side_effect=capture_assemble),
+    ):
+        out = await orch._render_prompt_async(
+            issue,
+            1,
+            "start",
+            workflow,
+            session_id="session-123",
+        )
+
+    assert out == "ok-prompt"
+    assert captured.get("is_rework") is True
+    assert captured.get("is_resumed_session") is True
+
+
+@pytest.mark.asyncio
+async def test_render_prompt_async_includes_stage_on_resumed_new_stage(tmp_path):
+    """When resuming into a different stage, include stage prompt once."""
+    orch = _orch(tmp_path, AG_GATE_YAML)
+    issue = _issue()
+    captured_calls: list[dict[str, object]] = []
+    workflow = orch.cfg.workflows["default"]
+    comments = []
+
+    def capture_assemble(*_a, **kw):
+        captured_calls.append(
+            {
+                "state_name": kw.get("state_name"),
+                "is_resumed_session": kw.get("is_resumed_session"),
+                "include_stage_prompt_on_resume": kw.get("include_stage_prompt_on_resume"),
+            }
+        )
+        return "ok-prompt"
+
+    with (
+        patch.object(orch, "_load_issue_comments", AsyncMock(return_value=comments)),
+        patch("stokowski.orchestrator.assemble_prompt", side_effect=capture_assemble),
+    ):
+        out1 = await orch._render_prompt_async(
+            issue,
+            1,
+            "start",
+            workflow,
+            session_id="session-123",
+        )
+        out2 = await orch._render_prompt_async(
+            issue,
+            1,
+            "route",
+            workflow,
+            session_id="session-123",
+        )
+
+    assert out1 == "ok-prompt"
+    assert out2 == "ok-prompt"
+    assert len(captured_calls) == 2
+    assert captured_calls[0]["is_resumed_session"] is True
+    assert captured_calls[0]["include_stage_prompt_on_resume"] is True
+    assert captured_calls[1]["is_resumed_session"] is True
+    assert captured_calls[1]["include_stage_prompt_on_resume"] is True
+
+
+@pytest.mark.asyncio
+async def test_render_prompt_async_omits_stage_on_resumed_same_stage(tmp_path):
+    """Repeated turns in same resumed stage should not resend stage prompt."""
+    orch = _orch(tmp_path, AG_GATE_YAML)
+    issue = _issue()
+    captured_calls: list[dict[str, object]] = []
+    workflow = orch.cfg.workflows["default"]
+    comments = []
+
+    def capture_assemble(*_a, **kw):
+        captured_calls.append(
+            {
+                "state_name": kw.get("state_name"),
+                "include_stage_prompt_on_resume": kw.get("include_stage_prompt_on_resume"),
+            }
+        )
+        return "ok-prompt"
+
+    with (
+        patch.object(orch, "_load_issue_comments", AsyncMock(return_value=comments)),
+        patch("stokowski.orchestrator.assemble_prompt", side_effect=capture_assemble),
+    ):
+        out1 = await orch._render_prompt_async(
+            issue,
+            1,
+            "start",
+            workflow,
+            session_id="session-123",
+        )
+        out2 = await orch._render_prompt_async(
+            issue,
+            2,
+            "start",
+            workflow,
+            session_id="session-123",
+        )
+
+    assert out1 == "ok-prompt"
+    assert out2 == "ok-prompt"
+    assert len(captured_calls) == 2
+    assert captured_calls[0]["include_stage_prompt_on_resume"] is True
+    assert captured_calls[1]["include_stage_prompt_on_resume"] is False
+
+
+def test_on_worker_exit_canceled_clears_prompt_stage_cache(tmp_path):
+    """Canceled worker exits should release per-issue resumed-stage cache."""
+    orch = _orch(tmp_path, AG_GATE_YAML)
+    issue = _issue()
+    orch._last_prompt_stage_by_issue[issue.id] = ("session-1", "start")
+
+    attempt = RunAttempt(
+        issue_id=issue.id,
+        issue_identifier=issue.identifier,
+        status="canceled",
+        state_name="start",
+        workflow_name="default",
+        session_id="session-1",
+    )
+
+    orch._on_worker_exit(issue, attempt)
+
+    assert issue.id not in orch._last_prompt_stage_by_issue
+
+
+@pytest.mark.asyncio
 async def test_agent_gate_success_transitions_chosen_key_and_posts_report(tmp_path):
     orch = _orch(tmp_path, AG_GATE_YAML)
     issue = _issue()
