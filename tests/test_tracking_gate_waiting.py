@@ -130,6 +130,52 @@ def test_get_last_gate_waiting_timestamp_returns_payload_timestamp_when_present(
     assert ts.endswith("+00:00")
 
 
+def test_get_last_gate_waiting_timestamp_uses_newest_waiting_by_effective_time():
+    """Timestamp helper should follow same newest selection as waiting parser."""
+    older = (
+        '<!-- stokowski:gate {"state":"g1","status":"waiting","run":1,'
+        '"timestamp":"2026-01-01T00:00:00+00:00"} -->'
+    )
+    newer = (
+        '<!-- stokowski:gate {"state":"g2","status":"waiting","run":2,'
+        '"timestamp":"2026-04-10T00:00:00+00:00"} -->'
+    )
+    comments = [
+        {"body": newer, "createdAt": "2026-04-10T00:00:01.000Z"},
+        {"body": older, "createdAt": "2026-01-01T00:00:01.000Z"},
+    ]
+    ts = get_last_gate_waiting_timestamp(comments)
+    assert ts == "2026-04-10T00:00:00+00:00"
+
+
+def test_get_last_gate_waiting_timestamp_falls_back_to_created_at():
+    """When payload timestamp is missing, helper should use comment createdAt."""
+    comments = [
+        {
+            "body": '<!-- stokowski:gate {"state":"g1","status":"waiting","run":1} -->',
+            "createdAt": "2026-06-01T12:30:00.000Z",
+        }
+    ]
+    ts = get_last_gate_waiting_timestamp(comments)
+    assert ts == "2026-06-01T12:30:00.000Z"
+
+
+def test_get_last_gate_waiting_timestamp_tie_prefers_last_waiting_marker():
+    """Equal timestamps should resolve to the last waiting marker."""
+    ts = "2026-05-01T10:00:00+00:00"
+    first = (
+        f'<!-- stokowski:gate {{"state":"g-first","status":"waiting","run":1,'
+        f'"timestamp":"{ts}"}} -->'
+    )
+    second = (
+        f'<!-- stokowski:gate {{"state":"g-second","status":"waiting","run":1,'
+        f'"timestamp":"{ts}"}} -->'
+    )
+    comments = [{"body": first}, {"body": second}]
+    got = get_last_gate_waiting_timestamp(comments)
+    assert got == ts
+
+
 def test_get_last_gate_waiting_timestamp_returns_none_when_no_waiting():
     comments = [{"body": make_gate_comment("g1", "approved", workflow="wf")}]
     assert get_last_gate_waiting_timestamp(comments) is None

@@ -169,6 +169,103 @@ async def test_render_prompt_async_marks_rework_when_latest_gate_rework_targets_
 
 
 @pytest.mark.asyncio
+async def test_render_prompt_async_marks_rework_when_payload_omits_rework_to(tmp_path):
+    """Fallback to gate config rework_to when marker omits explicit rework_to."""
+    orch = _orch(tmp_path, AG_GATE_YAML)
+    issue = _issue()
+    captured: dict[str, object] = {}
+    workflow = orch.cfg.workflows["default"]
+
+    comments = [
+        {
+            "id": "c1",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "body": '<!-- stokowski:gate {"state":"human","status":"rework","run":2,'
+            '"workflow":"default"} -->',
+        }
+    ]
+
+    def capture_assemble(*_a, **kw):
+        captured["is_rework"] = kw.get("is_rework")
+        return "ok-prompt"
+
+    with (
+        patch.object(orch, "_load_issue_comments", AsyncMock(return_value=comments)),
+        patch("stokowski.orchestrator.assemble_prompt", side_effect=capture_assemble),
+    ):
+        out = await orch._render_prompt_async(issue, 1, "start", workflow)
+
+    assert out == "ok-prompt"
+    assert captured.get("is_rework") is True
+
+
+@pytest.mark.asyncio
+async def test_render_prompt_async_not_rework_when_rework_targets_other_state(tmp_path):
+    """Do not mark rework when rework_to points to a different state."""
+    orch = _orch(tmp_path, AG_GATE_YAML)
+    issue = _issue()
+    captured: dict[str, object] = {}
+    workflow = orch.cfg.workflows["default"]
+
+    comments = [
+        {
+            "id": "c1",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "body": make_gate_comment(
+                state="human",
+                status="rework",
+                rework_to="fix",
+                run=2,
+                workflow="default",
+            ),
+        }
+    ]
+
+    def capture_assemble(*_a, **kw):
+        captured["is_rework"] = kw.get("is_rework")
+        return "ok-prompt"
+
+    with (
+        patch.object(orch, "_load_issue_comments", AsyncMock(return_value=comments)),
+        patch("stokowski.orchestrator.assemble_prompt", side_effect=capture_assemble),
+    ):
+        out = await orch._render_prompt_async(issue, 1, "start", workflow)
+
+    assert out == "ok-prompt"
+    assert captured.get("is_rework") is False
+
+
+@pytest.mark.asyncio
+async def test_render_prompt_async_not_rework_without_gate_rework_marker(tmp_path):
+    """Non-gate or non-rework markers must not set rework mode."""
+    orch = _orch(tmp_path, AG_GATE_YAML)
+    issue = _issue()
+    captured: dict[str, object] = {}
+    workflow = orch.cfg.workflows["default"]
+
+    comments = [
+        {
+            "id": "c1",
+            "createdAt": "2026-01-01T00:00:00.000Z",
+            "body": make_state_comment("start", run=2, workflow="default"),
+        }
+    ]
+
+    def capture_assemble(*_a, **kw):
+        captured["is_rework"] = kw.get("is_rework")
+        return "ok-prompt"
+
+    with (
+        patch.object(orch, "_load_issue_comments", AsyncMock(return_value=comments)),
+        patch("stokowski.orchestrator.assemble_prompt", side_effect=capture_assemble),
+    ):
+        out = await orch._render_prompt_async(issue, 1, "start", workflow)
+
+    assert out == "ok-prompt"
+    assert captured.get("is_rework") is False
+
+
+@pytest.mark.asyncio
 async def test_render_prompt_async_marks_resumed_rework_from_session_id(tmp_path):
     """Rework prompt assembly gets resumed-session context when session id exists."""
     orch = _orch(tmp_path, AG_GATE_YAML)
@@ -214,7 +311,7 @@ async def test_render_prompt_async_marks_resumed_rework_from_session_id(tmp_path
 
 @pytest.mark.asyncio
 async def test_render_prompt_async_includes_stage_on_resumed_new_stage(tmp_path):
-    """When resuming into a different stage, include stage prompt once."""
+    """Resumed turns inject stage only when an explicit new-stage transition is pending."""
     orch = _orch(tmp_path, AG_GATE_YAML)
     issue = _issue()
     captured_calls: list[dict[str, object]] = []
@@ -242,6 +339,7 @@ async def test_render_prompt_async_includes_stage_on_resumed_new_stage(tmp_path)
             workflow,
             session_id="session-123",
         )
+        orch._last_prompt_stage_by_issue[issue.id] = ("session-123", "route")
         out2 = await orch._render_prompt_async(
             issue,
             1,
@@ -254,14 +352,14 @@ async def test_render_prompt_async_includes_stage_on_resumed_new_stage(tmp_path)
     assert out2 == "ok-prompt"
     assert len(captured_calls) == 2
     assert captured_calls[0]["is_resumed_session"] is True
-    assert captured_calls[0]["include_stage_prompt_on_resume"] is True
+    assert captured_calls[0]["include_stage_prompt_on_resume"] is False
     assert captured_calls[1]["is_resumed_session"] is True
     assert captured_calls[1]["include_stage_prompt_on_resume"] is True
 
 
 @pytest.mark.asyncio
 async def test_render_prompt_async_omits_stage_on_resumed_same_stage(tmp_path):
-    """Repeated turns in same resumed stage should not resend stage prompt."""
+    """Same-stage resumed turns should always skip stage prompt."""
     orch = _orch(tmp_path, AG_GATE_YAML)
     issue = _issue()
     captured_calls: list[dict[str, object]] = []
@@ -299,7 +397,7 @@ async def test_render_prompt_async_omits_stage_on_resumed_same_stage(tmp_path):
     assert out1 == "ok-prompt"
     assert out2 == "ok-prompt"
     assert len(captured_calls) == 2
-    assert captured_calls[0]["include_stage_prompt_on_resume"] is True
+    assert captured_calls[0]["include_stage_prompt_on_resume"] is False
     assert captured_calls[1]["include_stage_prompt_on_resume"] is False
 
 
@@ -319,6 +417,30 @@ def test_on_worker_exit_canceled_clears_prompt_stage_cache(tmp_path):
     )
 
     orch._on_worker_exit(issue, attempt)
+
+    assert issue.id not in orch._last_prompt_stage_by_issue
+
+
+@pytest.mark.asyncio
+async def test_handle_orphaned_issue_release_clears_prompt_stage_cache(tmp_path):
+    """Orphan release path should clear per-issue resumed-stage cache."""
+    orch = _orch(tmp_path, AG_GATE_YAML)
+    issue = _issue()
+    orch._last_prompt_stage_by_issue[issue.id] = ("session-1", "start")
+    orch._issue_current_state[issue.id] = "start"
+    orch._issue_state_runs[issue.id] = 1
+    orch._pending_gates[issue.id] = "human"
+    orch._issue_workflow_cache[issue.id] = orch.cfg.workflows["default"]
+
+    mock_client = MagicMock()
+    mock_client.update_issue_state = AsyncMock(return_value=True)
+    mock_client.post_comment = AsyncMock(return_value=True)
+
+    with (
+        patch.object(orch, "_ensure_tracker_client", return_value=mock_client),
+        patch("stokowski.orchestrator.remove_workspace", AsyncMock(return_value=None)),
+    ):
+        await orch._handle_orphaned_issue(issue, "test-path", release_agent_resources=True)
 
     assert issue.id not in orch._last_prompt_stage_by_issue
 

@@ -114,4 +114,4 @@ Rollback:
   - global prompt present in resumed rework: false
   - stage prompt present in non-rework: true
   - stage prompt present in resumed rework (same-stage replay): false
-  - artifacts saved under `openspec/changes/optimize-prompt-assembly-rework-session/validation/`
+  - validation artifacts were generated during verification and then removed from version control
