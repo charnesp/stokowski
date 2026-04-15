@@ -8,7 +8,7 @@ import logging
 import os
 import signal
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +61,9 @@ class Orchestrator:
         self.total_output_tokens: int = 0
         self.total_tokens: int = 0
         self.total_seconds_running: float = 0
+        self._issue_input_tokens: dict[str, int] = {}
+        self._issue_output_tokens: dict[str, int] = {}
+        self._issue_total_tokens: dict[str, int] = {}
 
         # Internal
         self._tracker: TrackerClient | None = None
@@ -525,6 +528,9 @@ class Orchestrator:
         self._issue_state_runs.pop(issue.id, None)
         self._pending_gates.pop(issue.id, None)
         self._issue_workflow_cache.pop(issue.id, None)
+        self._issue_input_tokens.pop(issue.id, None)
+        self._issue_output_tokens.pop(issue.id, None)
+        self._issue_total_tokens.pop(issue.id, None)
 
         if release_agent_resources:
             self._last_session_ids.pop(issue.id, None)
@@ -711,6 +717,9 @@ class Orchestrator:
             self._last_session_ids.pop(issue.id, None)
             self._last_prompt_stage_by_issue.pop(issue.id, None)
             self._issue_workflow_cache.pop(issue.id, None)  # Clear workflow cache
+            self._issue_input_tokens.pop(issue.id, None)
+            self._issue_output_tokens.pop(issue.id, None)
+            self._issue_total_tokens.pop(issue.id, None)
             self.claimed.discard(issue.id)
             self.completed.add(issue.id)
 
@@ -1635,6 +1644,15 @@ class Orchestrator:
         self.total_input_tokens += attempt.input_tokens
         self.total_output_tokens += attempt.output_tokens
         self.total_tokens += attempt.total_tokens
+        self._issue_input_tokens[issue.id] = (
+            self._issue_input_tokens.get(issue.id, 0) + attempt.input_tokens
+        )
+        self._issue_output_tokens[issue.id] = (
+            self._issue_output_tokens.get(issue.id, 0) + attempt.output_tokens
+        )
+        self._issue_total_tokens[issue.id] = (
+            self._issue_total_tokens.get(issue.id, 0) + attempt.total_tokens
+        )
         if attempt.started_at:
             elapsed = (datetime.now(UTC) - attempt.started_at).total_seconds()
             self.total_seconds_running += elapsed
@@ -1889,6 +1907,9 @@ class Orchestrator:
                 self._tasks.pop(issue_id, None)
                 self.claimed.discard(issue_id)
                 self._issue_workflow_cache.pop(issue_id, None)  # Clear workflow cache
+                self._issue_input_tokens.pop(issue_id, None)
+                self._issue_output_tokens.pop(issue_id, None)
+                self._issue_total_tokens.pop(issue_id, None)
 
             elif state_lower == review_lower:
                 # In review/gate state — stop worker but keep gate tracking
@@ -1910,6 +1931,20 @@ class Orchestrator:
                 self.claimed.discard(issue_id)
                 self._issue_workflow_cache.pop(issue_id, None)  # Clear workflow cache
 
+    def _get_issue_tokens(self, issue_id: str) -> dict[str, int]:
+        """Return per-issue cumulative tokens with a one-month visibility window."""
+        last_completed = self._last_completed_at.get(issue_id)
+        if last_completed:
+            month_ago = datetime.now(UTC) - timedelta(days=31)
+            if last_completed < month_ago:
+                return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+        return {
+            "input_tokens": self._issue_input_tokens.get(issue_id, 0),
+            "output_tokens": self._issue_output_tokens.get(issue_id, 0),
+            "total_tokens": self._issue_total_tokens.get(issue_id, 0),
+        }
+
     def get_state_snapshot(self) -> dict[str, Any]:
         """Get current runtime state for observability."""
         now = datetime.now(UTC)
@@ -1930,17 +1965,14 @@ class Orchestrator:
                     "issue_identifier": r.issue_identifier,
                     "workflow_name": r.workflow_name,
                     "session_id": r.session_id,
+                    "run": self._issue_state_runs.get(r.issue_id, 1),
                     "turn_count": r.turn_count,
                     "status": r.status,
                     "last_event": r.last_event,
                     "last_message": r.last_message,
                     "started_at": r.started_at.isoformat() if r.started_at else None,
                     "last_event_at": (r.last_event_at.isoformat() if r.last_event_at else None),
-                    "tokens": {
-                        "input_tokens": r.input_tokens,
-                        "output_tokens": r.output_tokens,
-                        "total_tokens": r.total_tokens,
-                    },
+                    "tokens": self._get_issue_tokens(r.issue_id),
                     "state_name": r.state_name,
                 }
                 for r in self.running.values()
@@ -1951,6 +1983,8 @@ class Orchestrator:
                     "issue_identifier": e.identifier,
                     "attempt": e.attempt,
                     "error": e.error,
+                    "run": self._issue_state_runs.get(e.issue_id, 1),
+                    "tokens": self._get_issue_tokens(e.issue_id),
                 }
                 for e in self.retry_attempts.values()
             ],
@@ -1962,6 +1996,7 @@ class Orchestrator:
                     ).identifier,
                     "gate_state": gate_state,
                     "run": self._issue_state_runs.get(issue_id, 1),
+                    "tokens": self._get_issue_tokens(issue_id),
                 }
                 for issue_id, gate_state in self._pending_gates.items()
             ],
