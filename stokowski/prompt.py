@@ -18,7 +18,11 @@ from jinja2 import BaseLoader, Environment, Undefined, select_autoescape
 
 from .config import LinearStatesConfig, PromptsConfig, ServiceConfig, StateConfig
 from .models import Issue
-from .tracking import get_comments_since, get_last_tracking_timestamp
+from .tracking import (
+    get_comments_since,
+    get_last_gate_waiting_timestamp,
+    get_last_tracking_timestamp,
+)
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +95,7 @@ def build_template_context(
     run: int = 1,
     attempt: int = 1,
     last_run_at: str | None = None,
+    is_rework: bool = False,
 ) -> dict[str, Any]:
     """Build the Jinja2 template context dict from issue and run metadata.
 
@@ -100,6 +105,7 @@ def build_template_context(
         run: Current run number for this state.
         attempt: Retry attempt within this run.
         last_run_at: ISO timestamp of the last run, if any.
+        is_rework: Whether this is a rework run.
 
     Returns:
         A dict with the issue object and run metadata for Jinja2 rendering.
@@ -110,6 +116,7 @@ def build_template_context(
         "run": run,
         "attempt": attempt,
         "last_run_at": last_run_at or "",
+        "is_rework": is_rework,
     }
 
 
@@ -253,6 +260,8 @@ async def assemble_prompt(
     workflow_prompts: PromptsConfig | None = None,
     run: int = 1,
     is_rework: bool = False,
+    is_resumed_session: bool = False,
+    include_stage_prompt_on_resume: bool = False,
     attempt: int = 1,
     last_run_at: str | None = None,
     comments: list[dict[str, Any]] | None = None,
@@ -277,6 +286,9 @@ async def assemble_prompt(
         workflow_prompts: PromptsConfig for the current workflow (optional, falls back to cfg.prompts).
         run: Current run number.
         is_rework: Whether this is a rework run.
+        is_resumed_session: Whether the current turn resumes an existing session.
+        include_stage_prompt_on_resume: Whether stage prompt should be injected
+            for resumed turns (used when entering a new stage in a resumed session).
         attempt: Retry attempt within this run.
         last_run_at: ISO timestamp of the last run.
         comments: All comments on the issue (for filtering).
@@ -291,6 +303,7 @@ async def assemble_prompt(
         run=run,
         attempt=attempt,
         last_run_at=last_run_at,
+        is_rework=is_rework,
     )
 
     parts: list[str] = []
@@ -298,17 +311,32 @@ async def assemble_prompt(
     # Use workflow-specific prompts if provided, otherwise fall back to global config
     prompts = workflow_prompts if workflow_prompts is not None else cfg.prompts
 
+    include_static_prompts = not is_resumed_session
+
     # Layer 1: Global prompt
-    if prompts.global_prompt:
+    if prompts.global_prompt and include_static_prompts:
         try:
             raw = load_prompt_file(prompts.global_prompt, workflow_dir)
             rendered = render_template(raw, context)
             parts.append(rendered)
         except FileNotFoundError:
             log.warning("Global prompt file not found: %s", prompts.global_prompt)
+    elif prompts.global_prompt:
+        log.info("Skipped global prompt for '%s' due to resumed session", state_name)
+
+    stage_mode = "non-rework"
+    include_stage_prompt = include_static_prompts or include_stage_prompt_on_resume
+    if is_rework and is_resumed_session:
+        stage_mode = "rework-resume"
+    elif is_rework:
+        stage_mode = "rework-fresh"
+    elif is_resumed_session:
+        stage_mode = (
+            "non-rework-resume-new-stage" if include_stage_prompt_on_resume else "non-rework-resume"
+        )
 
     # Layer 2: Stage prompt
-    if state_cfg.prompt:
+    if state_cfg.prompt and include_stage_prompt:
         try:
             raw = load_prompt_file(state_cfg.prompt, workflow_dir)
             rendered = render_template(raw, context)
@@ -320,12 +348,16 @@ async def assemble_prompt(
                 state_name,
                 state_cfg.prompt,
             )
+    elif state_cfg.prompt:
+        log.info("Skipped stage prompt for '%s' due to prompt mode: %s", state_name, stage_mode)
 
     # Layer 3: Lifecycle injection
     # Filter comments to recent non-tracking ones
     recent: list[dict[str, Any]] = []
     if comments:
-        last_ts = get_last_tracking_timestamp(comments)
+        # Prefer comments since the latest waiting gate so rework runs include
+        # reviewer feedback left during gate review.
+        last_ts = get_last_gate_waiting_timestamp(comments) or get_last_tracking_timestamp(comments)
         recent = get_comments_since(comments, last_ts)
 
     # Load lifecycle template (required)

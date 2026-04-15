@@ -68,6 +68,7 @@ class Orchestrator:
         self._retry_timers: dict[str, asyncio.TimerHandle] = {}
         self._child_pids: set[int] = set()  # Track claude subprocess PIDs
         self._last_session_ids: dict[str, str] = {}  # issue_id -> last known session_id
+        self._last_prompt_stage_by_issue: dict[str, tuple[str, str]] = {}
         self._jinja = Environment(undefined=StrictUndefined, autoescape=select_autoescape())
         self._running = False
         self._last_issues: dict[str, Issue] = {}
@@ -527,6 +528,7 @@ class Orchestrator:
 
         if release_agent_resources:
             self._last_session_ids.pop(issue.id, None)
+            self._last_prompt_stage_by_issue.pop(issue.id, None)
             self.claimed.discard(issue.id)
             self.completed.add(issue.id)
             try:
@@ -707,6 +709,7 @@ class Orchestrator:
             self._issue_state_runs.pop(issue.id, None)
             self._pending_gates.pop(issue.id, None)
             self._last_session_ids.pop(issue.id, None)
+            self._last_prompt_stage_by_issue.pop(issue.id, None)
             self._issue_workflow_cache.pop(issue.id, None)  # Clear workflow cache
             self.claimed.discard(issue.id)
             self.completed.add(issue.id)
@@ -1228,7 +1231,13 @@ class Orchestrator:
                     return
 
             prompt = await self._render_prompt_async(
-                issue, attempt.attempt, state_name, workflow, attempt.previous_error, ws.path
+                issue,
+                attempt.attempt,
+                state_name,
+                workflow,
+                attempt.previous_error,
+                attempt.session_id,
+                ws.path,
             )
 
             # Build env vars for the agent subprocess from workflow.yaml config
@@ -1318,6 +1327,7 @@ class Orchestrator:
         state_name: str | None = None,
         workflow: WorkflowConfig | None = None,
         previous_error: str | None = None,
+        session_id: str | None = None,
         workspace_path: Path | None = None,
     ) -> str:
         """Render prompt using state machine prompt assembly (async — fetches comments)."""
@@ -1339,12 +1349,31 @@ class Orchestrator:
             run = self._issue_state_runs.get(issue.id, 1)
             last_completed = self._last_completed_at.get(issue.id)
             last_run_at = last_completed.isoformat() if last_completed else None
+            include_stage_prompt_on_resume = False
+            if session_id:
+                pending = self._last_prompt_stage_by_issue.get(issue.id)
+                include_stage_prompt_on_resume = pending == (session_id, state_name)
+                if include_stage_prompt_on_resume:
+                    self._last_prompt_stage_by_issue.pop(issue.id, None)
 
             # Fetch comments for lifecycle context (with image downloads if workspace_path provided)
             comments: list[dict] | None = None
+            is_rework = False
             try:
                 client = self._ensure_tracker_client()
                 comments = await self._load_issue_comments(client, issue, workspace_path)
+                tracking = parse_latest_tracking(comments)
+                if (
+                    tracking
+                    and tracking.get("type") == "gate"
+                    and tracking.get("status") == "rework"
+                ):
+                    rework_to = tracking.get("rework_to")
+                    if not rework_to:
+                        gate_state = tracking.get("state")
+                        gate_cfg = workflow_states.get(gate_state) if gate_state else None
+                        rework_to = gate_cfg.rework_to if gate_cfg else None
+                    is_rework = bool(rework_to and rework_to == state_name)
             except Exception as e:
                 logger.warning(f"Failed to fetch comments for prompt: {e}")
 
@@ -1357,7 +1386,9 @@ class Orchestrator:
                 workflow_states=workflow_states,
                 workflow_prompts=workflow_prompts,
                 run=run,
-                is_rework=False,
+                is_rework=is_rework,
+                is_resumed_session=bool(session_id),
+                include_stage_prompt_on_resume=include_stage_prompt_on_resume,
                 attempt=attempt_num or 1,
                 last_run_at=last_run_at,
                 comments=comments,
@@ -1669,6 +1700,8 @@ class Orchestrator:
 
         self.running.pop(issue.id, None)
         self._tasks.pop(issue.id, None)
+        if attempt.status == "canceled":
+            self._last_prompt_stage_by_issue.pop(issue.id, None)
 
         if attempt.status == "succeeded":
             if workflow_config_error_exit:

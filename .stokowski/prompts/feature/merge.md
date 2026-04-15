@@ -143,7 +143,8 @@ If any step fails, report the error and remain in this state. Do not proceed unt
 
 ## Rework run
 
-If this is a rework run (merge was attempted before but failed):
+{% if is_rework %}
+This is a rework run (merge was attempted before but failed):
 
 1. Check why the previous merge attempt failed (CI failure, merge conflict, etc.).
 2. If there is a merge conflict:
@@ -155,6 +156,7 @@ If this is a rework run (merge was attempted before but failed):
    - If it is a test failure caused by the PR's changes, post details to Linear and stop (this needs to go back to implementation).
    - If it is a flaky or infrastructure issue, re-run and retry the merge.
 4. Update the Linear tracking comment with what happened.
+{% endif %}
 
 ## Do NOT
 
