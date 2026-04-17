@@ -69,7 +69,7 @@ class ClaudeConfig:
         default_factory=lambda: ["Bash", "Read", "Edit", "Write", "Glob", "Grep"]
     )
     model: str | None = None
-    max_turns: int = 20
+    max_turns: int = 20  # Parsed/merged from YAML; not used to cap orchestrator dispatches.
     turn_timeout_ms: int = 3_600_000
     stall_timeout_ms: int = 300_000
     append_system_prompt: str | None = None
@@ -105,14 +105,21 @@ class PromptsConfig:
 
     Attributes:
         global_prompt: Path to the global prompt .md file (optional).
-        lifecycle_prompt: Path to the lifecycle injection template .md file (required).
-            This Jinja2 template is rendered for every agent turn to provide
-            lifecycle context (report requirements, rework info, transitions).
+        lifecycle_prompt: Path to the pre-run lifecycle template .md file (required).
+            Rendered as Layer 3 of the primary work prompt (issue context, transitions).
             Defaults to "prompts/lifecycle.md".
+        lifecycle_post_run_prompt: Optional path to the post-run closure template.
+            When unset, defaults to ``prompts/lifecycle-post-run.md`` (see
+            ``resolved_lifecycle_post_run_prompt``).
     """
 
     global_prompt: str | None = None
     lifecycle_prompt: str = "prompts/lifecycle.md"
+    lifecycle_post_run_prompt: str | None = None
+
+    def resolved_lifecycle_post_run_prompt(self) -> str:
+        """Path to the post-run lifecycle template relative to workflow.yaml."""
+        return self.lifecycle_post_run_prompt or "prompts/lifecycle-post-run.md"
 
 
 @dataclass
@@ -144,7 +151,7 @@ class StateConfig:
     linear_state: str = "active"  # key into LinearStatesConfig
     runner: str = "claude"
     model: str | None = None
-    max_turns: int | None = None
+    max_turns: int | None = None  # Merged into effective ClaudeConfig; see ClaudeConfig.max_turns.
     turn_timeout_ms: int | None = None
     stall_timeout_ms: int | None = None
     session: str = "inherit"
@@ -155,6 +162,8 @@ class StateConfig:
     default_transition: str | None = None  # agent-gate only: fallback key in transitions
     transitions: dict[str, str] = field(default_factory=lambda: {})
     hooks: HooksConfig | None = None
+    # When None on type agent: treated as True. On agent-gate: must be set explicitly in YAML.
+    post_run: bool | None = None
 
 
 @dataclass
@@ -358,6 +367,18 @@ def _is_agent_like(sc: StateConfig) -> bool:
     return sc.type in ("agent", "agent-gate")
 
 
+def effective_post_run(state: StateConfig) -> bool:
+    """Whether the orchestrator should run a post-run follow-up after the work turn.
+
+    ``agent`` states default to True when ``post_run`` is omitted. ``agent-gate`` must
+    declare ``post_run`` in YAML (enforced by ``validate_config``); if omitted, treat
+    as False until validation runs.
+    """
+    if state.post_run is not None:
+        return bool(state.post_run)
+    return state.type == "agent"
+
+
 def _resolve_linear_state_name(key: str, ls: LinearStatesConfig) -> str:
     """Resolve a logical state key to the actual Linear state name."""
     mapping: dict[str, str] = {
@@ -430,6 +451,7 @@ def _parse_state_config(name: str, raw: dict[str, Any]) -> StateConfig:
         default_transition=raw.get("default_transition"),
         transitions=raw.get("transitions") or {},
         hooks=_parse_hooks(hooks_raw) if hooks_raw else None,
+        post_run=(bool(raw["post_run"]) if "post_run" in raw else None),
     )
 
 
@@ -555,6 +577,7 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
     prompts = PromptsConfig(
         global_prompt=pr_raw.get("global_prompt"),
         lifecycle_prompt=lifecycle_prompt,
+        lifecycle_post_run_prompt=pr_raw.get("lifecycle_post_run_prompt"),
     )
 
     # Parse states
@@ -581,6 +604,7 @@ def parse_workflow_file(path: str | Path) -> WorkflowDefinition:
                 lifecycle_prompt=str(
                     wf_prompts_raw.get("lifecycle_prompt", "prompts/lifecycle.md")
                 ),
+                lifecycle_post_run_prompt=wf_prompts_raw.get("lifecycle_post_run_prompt"),
             )
 
             workflows[wf_name] = WorkflowConfig(
@@ -642,6 +666,11 @@ def _validate_agent_gate_rules(
                 f"{msg_prefix} (agent-gate) default_transition must target a state with "
                 f"type 'gate', not '{target_cfg.type}' (target '{target_name}')"
             )
+    if sc.post_run is None:
+        errors.append(
+            f"{msg_prefix} (agent-gate) must declare 'post_run' (true or false); "
+            "typical routing gates use post_run: false"
+        )
 
 
 def validate_config(cfg: ServiceConfig, skip_secrets_check: bool = False) -> list[str]:

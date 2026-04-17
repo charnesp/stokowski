@@ -247,6 +247,9 @@ async def run_codex_turn(
     turn_timeout_ms: int = 3_600_000,
     stall_timeout_ms: int = 300_000,
     env: dict[str, str] | None = None,
+    *,
+    run_before_hook: bool = True,
+    run_after_hook: bool = True,
 ) -> RunAttempt:
     """Run a single Codex turn. Returns updated RunAttempt.
 
@@ -258,7 +261,7 @@ async def run_codex_turn(
     logger.info(f"Launching codex issue={issue.identifier} turn={attempt.turn_count + 1}")
 
     # Run before_run hook
-    if hooks_cfg.before_run:
+    if hooks_cfg.before_run and run_before_hook:
         from .workspace import run_hook
 
         ok = await run_hook(
@@ -274,6 +277,7 @@ async def run_codex_turn(
     attempt.turn_count += 1
     attempt.last_event_at = datetime.now(UTC)
 
+    pid_registered = False
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -295,6 +299,7 @@ async def run_codex_turn(
 
         if on_pid and proc.pid:
             on_pid(proc.pid, True)
+            pid_registered = True
     except FileNotFoundError:
         attempt.status = "failed"
         attempt.error = "Codex command not found: codex"
@@ -335,6 +340,10 @@ async def run_codex_turn(
                 return
 
     output_lines: list[str] = []
+    reader: asyncio.Task[list[str]] | None = None
+    monitor: asyncio.Task[None] | None = None
+    cancelled = False
+    pending: set[asyncio.Task[Any]] = set()
     try:
         reader = asyncio.create_task(read_stream())
         monitor = asyncio.create_task(stall_monitor())
@@ -347,54 +356,75 @@ async def run_codex_turn(
 
         if not done:
             logger.warning(f"Codex turn timeout issue={issue.identifier}")
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
             attempt.status = "timed_out"
             attempt.error = f"Turn exceeded {turn_timeout_s}s"
         else:
-            await asyncio.wait_for(proc.wait(), timeout=30)
-            # Capture output from reader task
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=30)
+            except TimeoutError:
+                logger.warning("Codex subprocess wait timed out issue=%s", issue.identifier)
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                if attempt.status == "streaming":
+                    attempt.status = "failed"
+                    attempt.error = "Codex subprocess did not exit within 30s after stream ended"
             if reader in done:
                 try:
                     output_lines = reader.result()
-                except Exception:
-                    logger.debug("Failed to get reader result", exc_info=True)
+                except Exception as e:
+                    logger.error("Codex stream reader failed issue=%s: %s", issue.identifier, e)
+                    if attempt.status == "streaming":
+                        attempt.status = "failed"
+                        attempt.error = f"Stream reader failed: {e}"
 
+    except asyncio.CancelledError:
+        cancelled = True
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        raise
+    except Exception as e:
+        logger.error(f"Codex runner error issue={issue.identifier}: {e}")
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        attempt.status = "failed"
+        attempt.error = str(e)
+    finally:
         for task in pending:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        for t in (reader, monitor):
+            if t is not None and not t.done():
+                t.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await t
 
-    except Exception as e:
-        logger.error(f"Codex runner error issue={issue.identifier}: {e}")
-        proc.kill()
-        attempt.status = "failed"
-        attempt.error = str(e)
-        # Still need to run after_run hook and unregister PID below
-
-    # Store full output for validation and reporting
-    attempt.full_output = "\n".join(output_lines)
-
-    # Determine final status from exit code and validate report
-    stderr_output = ""
-    if proc.stderr:
         try:
-            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
-            stderr_output = stderr_bytes.decode()[:500]
-        except (TimeoutError, Exception):
-            pass
-    _finalize_attempt(attempt, proc.returncode, stderr_output, issue.identifier)
+            attempt.full_output = "\n".join(output_lines)
 
-    # Run after_run hook
-    if hooks_cfg.after_run:
-        from .workspace import run_hook
+            stderr_output = ""
+            if proc.stderr:
+                try:
+                    stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
+                    stderr_output = stderr_bytes.decode()[:500]
+                except (TimeoutError, Exception):
+                    pass
+            _finalize_attempt(attempt, proc.returncode, stderr_output, issue.identifier)
 
-        await run_hook(hooks_cfg.after_run, workspace_path, hooks_cfg.timeout_ms, "after_run")
+            if hooks_cfg.after_run and run_after_hook and not cancelled:
+                from .workspace import run_hook
 
-    # Unregister PID
-    if on_pid and proc.pid:
-        on_pid(proc.pid, False)
+                await run_hook(
+                    hooks_cfg.after_run, workspace_path, hooks_cfg.timeout_ms, "after_run"
+                )
+        finally:
+            if pid_registered and on_pid and proc.pid:
+                on_pid(proc.pid, False)
 
-    logger.info(f"Codex turn complete issue={issue.identifier} status={attempt.status}")
+        if not cancelled:
+            logger.info(f"Codex turn complete issue={issue.identifier} status={attempt.status}")
 
     return attempt
 
@@ -410,6 +440,9 @@ async def run_agent_turn(
     on_pid: PidCallback | None = None,
     env: dict[str, str] | None = None,
     log_agent_output_dir: Path | None = None,
+    *,
+    run_before_hook: bool = True,
+    run_after_hook: bool = True,
 ) -> RunAttempt:
     """Run a single Claude Code turn. Returns updated RunAttempt."""
     args = build_claude_args(claude_cfg, workspace_path, attempt.session_id)
@@ -421,7 +454,7 @@ async def run_agent_turn(
     )
 
     # Run before_run hook
-    if hooks_cfg.before_run:
+    if hooks_cfg.before_run and run_before_hook:
         from .workspace import run_hook
 
         ok = await run_hook(
@@ -438,6 +471,7 @@ async def run_agent_turn(
     attempt.full_output = ""
     attempt.last_event_at = datetime.now(UTC)
 
+    pid_registered = False
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -459,6 +493,7 @@ async def run_agent_turn(
 
         if on_pid and proc.pid:
             on_pid(proc.pid, True)
+            pid_registered = True
     except FileNotFoundError:
         attempt.status = "failed"
         attempt.error = f"Claude command not found: {claude_cfg.command}"
@@ -514,7 +549,7 @@ async def run_agent_turn(
 
     reader_task: asyncio.Task[None] | None = None
     monitor_task: asyncio.Task[None] | None = None
-    stream_exc: BaseException | None = None
+    cancelled = False
     try:
         reader_task = asyncio.create_task(read_stream())
         monitor_task = asyncio.create_task(stall_monitor())
@@ -549,8 +584,20 @@ async def run_agent_turn(
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
+        if reader_task in done:
+            exc = reader_task.exception()
+            if exc is not None and not isinstance(exc, asyncio.CancelledError):
+                logger.error("Claude stream reader failed issue=%s: %s", issue.identifier, exc)
+                if attempt.status == "streaming":
+                    attempt.status = "failed"
+                    attempt.error = f"Stream reader failed: {exc}"
+
+    except asyncio.CancelledError:
+        cancelled = True
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        raise
     except Exception as e:
-        stream_exc = e
         logger.error(f"Runner error issue={issue.identifier}: {e}")
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
@@ -563,36 +610,34 @@ async def run_agent_turn(
                 with contextlib.suppress(asyncio.CancelledError):
                     await t
 
-    if stream_exc is not None:
-        _maybe_log_claude_agent_output(log_agent_output_dir, issue, attempt)
-        return attempt
-
-    # Determine final status from exit code and validate report
-    stderr_output = ""
-    if proc.stderr:
         try:
-            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
-            stderr_output = stderr_bytes.decode()[:500]
-        except (TimeoutError, Exception):
-            pass
-    _maybe_log_claude_agent_output(log_agent_output_dir, issue, attempt)
-    _finalize_attempt(attempt, proc.returncode, stderr_output, issue.identifier)
+            # Same tail as Codex/Mux: stderr, finalize (no-op if status already set), hooks.
+            stderr_output = ""
+            if proc.stderr:
+                try:
+                    stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
+                    stderr_output = stderr_bytes.decode()[:500]
+                except (TimeoutError, Exception):
+                    pass
+            _maybe_log_claude_agent_output(log_agent_output_dir, issue, attempt)
+            _finalize_attempt(attempt, proc.returncode, stderr_output, issue.identifier)
 
-    # Run after_run hook
-    if hooks_cfg.after_run:
-        from .workspace import run_hook
+            if hooks_cfg.after_run and run_after_hook and not cancelled:
+                from .workspace import run_hook
 
-        await run_hook(hooks_cfg.after_run, workspace_path, hooks_cfg.timeout_ms, "after_run")
+                await run_hook(
+                    hooks_cfg.after_run, workspace_path, hooks_cfg.timeout_ms, "after_run"
+                )
+        finally:
+            if pid_registered and on_pid and proc.pid:
+                on_pid(proc.pid, False)
 
-    # Unregister PID
-    if on_pid and proc.pid:
-        on_pid(proc.pid, False)
-
-    logger.info(
-        f"Turn complete issue={issue.identifier} "
-        f"status={attempt.status} "
-        f"tokens={attempt.total_tokens}"
-    )
+        if not cancelled:
+            logger.info(
+                f"Turn complete issue={issue.identifier} "
+                f"status={attempt.status} "
+                f"tokens={attempt.total_tokens}"
+            )
 
     return attempt
 
@@ -673,6 +718,9 @@ async def run_mux_turn(
     turn_timeout_ms: int = 3_600_000,
     stall_timeout_ms: int = 300_000,
     env: dict[str, str] | None = None,
+    *,
+    run_before_hook: bool = True,
+    run_after_hook: bool = True,
 ) -> RunAttempt:
     """Run a single Mux turn. Returns updated RunAttempt.
 
@@ -690,7 +738,7 @@ async def run_mux_turn(
     logger.info(f"MUX PROMPT for {issue.identifier}:\n{'=' * 60}\n{prompt}\n{'=' * 60}")
 
     # Run before_run hook
-    if hooks_cfg.before_run:
+    if hooks_cfg.before_run and run_before_hook:
         from .workspace import run_hook
 
         ok = await run_hook(
@@ -704,8 +752,10 @@ async def run_mux_turn(
     attempt.status = "streaming"
     attempt.started_at = attempt.started_at or datetime.now(UTC)
     attempt.turn_count += 1
+    attempt.full_output = ""
     attempt.last_event_at = datetime.now(UTC)
 
+    pid_registered = False
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -727,6 +777,7 @@ async def run_mux_turn(
 
         if on_pid and proc.pid:
             on_pid(proc.pid, True)
+            pid_registered = True
     except FileNotFoundError:
         attempt.status = "failed"
         attempt.error = "npx command not found: ensure Node.js is installed"
@@ -772,81 +823,81 @@ async def run_mux_turn(
                     debug_file.flush()
                 attempt.last_message = line_str[:600]
 
-            # Parse as JSON and extract assistant messages
-            try:
-                event = json.loads(line_str)
-                # Mux JSON format: {"type": "event", "payload": {...}}
-                if isinstance(event, dict):
-                    event_type = event.get("type", "")
+                # Parse as JSON and extract assistant messages
+                try:
+                    event = json.loads(line_str)
+                    # Mux JSON format: {"type": "event", "payload": {...}}
+                    if isinstance(event, dict):
+                        event_type = event.get("type", "")
 
-                    # Debug: log event types we see
-                    if event_type not in ("event", "caught-up"):
-                        logger.debug(f"Mux event type: {event_type}")
+                        # Debug: log event types we see
+                        if event_type not in ("event", "caught-up"):
+                            logger.debug(f"Mux event type: {event_type}")
 
-                    # Handle Mux format: wrapped in "event" type with payload
-                    if event_type == "event":
-                        payload = event.get("payload", {})
-                        payload_type = payload.get("type", "")
+                        # Handle Mux format: wrapped in "event" type with payload
+                        if event_type == "event":
+                            payload = event.get("payload", {})
+                            payload_type = payload.get("type", "")
 
-                        # Debug: log payload types (limit frequency)
-                        if payload_type not in ("stream-delta", "runtime-status"):
-                            logger.debug(
-                                f"Mux payload type: {payload_type}, keys: {list(payload.keys())}"
-                            )
-
-                        # Stream-end contains the complete message with parts
-                        # Take ALL text parts and concatenate them
-                        if payload_type == "stream-end":
-                            parts = payload.get("parts", [])
-                            text_parts = []
-                            for part in parts:
-                                if part.get("type") == "text":
-                                    text = part.get("text", "")
-                                    if text:
-                                        text_parts.append(text)
-                            if text_parts:
-                                combined_text = "".join(text_parts)
-                                assistant_messages.append(combined_text)
-                                logger.info(
-                                    f"Mux: Extracted {len(combined_text)} chars from {len(text_parts)} text parts"
+                            # Debug: log payload types (limit frequency)
+                            if payload_type not in ("stream-delta", "runtime-status"):
+                                logger.debug(
+                                    f"Mux payload type: {payload_type}, keys: {list(payload.keys())}"
                                 )
 
-                        # Token usage from run-complete
-                    elif event_type == "run-complete":
-                        usage = event.get("usage", {})
-                        if usage:
-                            attempt.input_tokens = usage.get("inputTokens", 0)
-                            attempt.output_tokens = usage.get("outputTokens", 0)
-                            attempt.total_tokens = usage.get("inputTokens", 0) + usage.get(
-                                "outputTokens", 0
-                            )
+                            # Stream-end contains the complete message with parts
+                            # Take ALL text parts and concatenate them
+                            if payload_type == "stream-end":
+                                parts = payload.get("parts", [])
+                                text_parts = []
+                                for part in parts:
+                                    if part.get("type") == "text":
+                                        text = part.get("text", "")
+                                        if text:
+                                            text_parts.append(text)
+                                if text_parts:
+                                    combined_text = "".join(text_parts)
+                                    assistant_messages.append(combined_text)
+                                    logger.info(
+                                        f"Mux: Extracted {len(combined_text)} chars from {len(text_parts)} text parts"
+                                    )
 
-                    # Handle Claude Code format (for compatibility)
-                    elif event_type == "assistant":
-                        msg = event.get("message", {})
-                        content = msg.get("content", "")
-                        if content:
-                            assistant_messages.append(content)
-                    elif event_type == "result":
-                        # Extract token usage from result
-                        usage = event.get("usage", {})
-                        if usage:
-                            attempt.input_tokens = usage.get("input_tokens", 0)
-                            attempt.output_tokens = usage.get("output_tokens", 0)
-                            attempt.total_tokens = (
-                                usage.get("total_tokens", 0)
-                                or attempt.input_tokens + attempt.output_tokens
-                            )
-                        # Also check for direct result text
-                        result_text = event.get("result", "")
-                        if isinstance(result_text, str) and result_text:
-                            assistant_messages.append(result_text)
-            except json.JSONDecodeError:
-                # Not JSON - Mux may output plain text alongside NDJSON
-                # Collect these lines as assistant output
-                if line_str.strip():
-                    assistant_messages.append(line_str)
-                    logger.debug(f"Mux: Non-JSON text ({len(line_str)} chars)")
+                            # Token usage from run-complete
+                        elif event_type == "run-complete":
+                            usage = event.get("usage", {})
+                            if usage:
+                                attempt.input_tokens = usage.get("inputTokens", 0)
+                                attempt.output_tokens = usage.get("outputTokens", 0)
+                                attempt.total_tokens = usage.get("inputTokens", 0) + usage.get(
+                                    "outputTokens", 0
+                                )
+
+                        # Handle Claude Code format (for compatibility)
+                        elif event_type == "assistant":
+                            msg = event.get("message", {})
+                            content = msg.get("content", "")
+                            if content:
+                                assistant_messages.append(content)
+                        elif event_type == "result":
+                            # Extract token usage from result
+                            usage = event.get("usage", {})
+                            if usage:
+                                attempt.input_tokens = usage.get("input_tokens", 0)
+                                attempt.output_tokens = usage.get("output_tokens", 0)
+                                attempt.total_tokens = (
+                                    usage.get("total_tokens", 0)
+                                    or attempt.input_tokens + attempt.output_tokens
+                                )
+                            # Also check for direct result text
+                            result_text = event.get("result", "")
+                            if isinstance(result_text, str) and result_text:
+                                assistant_messages.append(result_text)
+                except json.JSONDecodeError:
+                    # Not JSON - Mux may output plain text alongside NDJSON
+                    # Collect these lines as assistant output
+                    if line_str.strip():
+                        assistant_messages.append(line_str)
+                        logger.debug(f"Mux: Non-JSON text ({len(line_str)} chars)")
 
             # Store raw NDJSON for debugging, but also reconstructed readable output
             readable_output = "\n".join(assistant_messages)
@@ -872,6 +923,10 @@ async def run_mux_turn(
                 attempt.error = f"No output for {elapsed:.0f}s"
                 return
 
+    reader: asyncio.Task[list[str]] | None = None
+    monitor: asyncio.Task[None] | None = None
+    cancelled = False
+    pending: set[asyncio.Task[Any]] = set()
     try:
         reader = asyncio.create_task(read_stream())
         monitor = asyncio.create_task(stall_monitor())
@@ -884,44 +939,72 @@ async def run_mux_turn(
 
         if not done:
             logger.warning(f"Mux turn timeout issue={issue.identifier}")
-            proc.kill()
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
             attempt.status = "timed_out"
             attempt.error = f"Turn exceeded {turn_timeout_s}s"
         else:
-            await asyncio.wait_for(proc.wait(), timeout=30)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=30)
+            except TimeoutError:
+                logger.warning("Mux subprocess wait timed out issue=%s", issue.identifier)
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                if attempt.status == "streaming":
+                    attempt.status = "failed"
+                    attempt.error = "Mux subprocess did not exit within 30s after stream ended"
+            if reader in done:
+                exc = reader.exception()
+                if exc is not None and not isinstance(exc, asyncio.CancelledError):
+                    logger.error("Mux stream reader failed issue=%s: %s", issue.identifier, exc)
+                    if attempt.status == "streaming":
+                        attempt.status = "failed"
+                        attempt.error = f"Stream reader failed: {exc}"
 
+    except asyncio.CancelledError:
+        cancelled = True
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        raise
+    except Exception as e:
+        logger.error(f"Mux runner error issue={issue.identifier}: {e}")
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        attempt.status = "failed"
+        attempt.error = str(e)
+    finally:
         for task in pending:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        for t in (reader, monitor):
+            if t is not None and not t.done():
+                t.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await t
 
-    except Exception as e:
-        logger.error(f"Mux runner error issue={issue.identifier}: {e}")
-        proc.kill()
-        attempt.status = "failed"
-        attempt.error = str(e)
-
-    # Determine final status from exit code and validate report
-    stderr_output = ""
-    if proc.stderr:
         try:
-            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
-            stderr_output = stderr_bytes.decode()[:500]
-        except (TimeoutError, Exception):
-            pass
-    _finalize_attempt(attempt, proc.returncode, stderr_output, issue.identifier)
+            stderr_output = ""
+            if proc.stderr:
+                try:
+                    stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5)
+                    stderr_output = stderr_bytes.decode()[:500]
+                except (TimeoutError, Exception):
+                    pass
+            _finalize_attempt(attempt, proc.returncode, stderr_output, issue.identifier)
 
-    # Run after_run hook
-    if hooks_cfg.after_run:
-        from .workspace import run_hook
+            if hooks_cfg.after_run and run_after_hook and not cancelled:
+                from .workspace import run_hook
 
-        await run_hook(hooks_cfg.after_run, workspace_path, hooks_cfg.timeout_ms, "after_run")
+                await run_hook(
+                    hooks_cfg.after_run, workspace_path, hooks_cfg.timeout_ms, "after_run"
+                )
+        finally:
+            if pid_registered and on_pid and proc.pid:
+                on_pid(proc.pid, False)
 
-    # Unregister PID
-    if on_pid and proc.pid:
-        on_pid(proc.pid, False)
-
-    logger.info(f"Mux turn complete issue={issue.identifier} status={attempt.status}")
+        if not cancelled:
+            logger.info(f"Mux turn complete issue={issue.identifier} status={attempt.status}")
 
     return attempt
 
@@ -938,8 +1021,16 @@ async def run_turn(
     on_pid: PidCallback | None = None,
     env: dict[str, str] | None = None,
     log_agent_output_dir: Path | None = None,
+    *,
+    run_before_hook: bool = True,
+    run_after_hook: bool = True,
 ) -> RunAttempt:
-    """Route to the correct runner based on runner_type."""
+    """Route to the correct runner based on runner_type.
+
+    For a work + post-run pair, pass ``run_after_hook=False`` on the work turn and
+    ``run_before_hook=False`` on the post-run turn so ``before_run`` runs only before
+    work and ``after_run`` only after the final post-run turn.
+    """
     if runner_type == "codex":
         return await run_codex_turn(
             model=claude_cfg.model,
@@ -952,6 +1043,8 @@ async def run_turn(
             turn_timeout_ms=claude_cfg.turn_timeout_ms,
             stall_timeout_ms=claude_cfg.stall_timeout_ms,
             env=env,
+            run_before_hook=run_before_hook,
+            run_after_hook=run_after_hook,
         )
     elif runner_type == "mux":
         return await run_mux_turn(
@@ -965,6 +1058,8 @@ async def run_turn(
             turn_timeout_ms=claude_cfg.turn_timeout_ms,
             stall_timeout_ms=claude_cfg.stall_timeout_ms,
             env=env,
+            run_before_hook=run_before_hook,
+            run_after_hook=run_after_hook,
         )
     elif runner_type == "claude":
         return await run_agent_turn(
@@ -978,6 +1073,8 @@ async def run_turn(
             on_pid=on_pid,
             env=env,
             log_agent_output_dir=log_agent_output_dir,
+            run_before_hook=run_before_hook,
+            run_after_hook=run_after_hook,
         )
     else:
         raise ValueError(f"Unknown runner type: {runner_type}")

@@ -19,13 +19,14 @@ from .config import (
     ServiceConfig,
     WorkflowConfig,
     WorkflowDefinition,
+    effective_post_run,
     merge_state_config,
     parse_workflow_file,
     validate_config,
 )
 from .linear import LinearClient  # noqa: F401 - triggers registration
 from .models import Issue, RetryEntry, RunAttempt
-from .prompt import assemble_prompt
+from .prompt import assemble_post_run_lifecycle_prompt, assemble_prompt
 from .reporting import extract_report, format_no_report_comment, format_report_comment
 from .runner import run_turn
 from .tracker import CommentsFetchError, TrackerClient
@@ -1181,6 +1182,21 @@ class Orchestrator:
             state_name = attempt.state_name
             state_cfg = workflow_states.get(state_name) if state_name else None
 
+            if not state_name or state_cfg is None:
+                logger.error(
+                    "Cannot run worker for %s: missing or unknown state_name=%r (workflow=%s)",
+                    issue.identifier,
+                    state_name,
+                    workflow.name,
+                )
+                attempt.status = "failed"
+                attempt.error = (
+                    f"No state configuration for state_name={state_name!r} "
+                    f"in workflow '{workflow.name}'"
+                )
+                self._on_worker_exit(issue, attempt)
+                return
+
             claude_cfg = self.cfg.claude
             hooks_cfg = self.cfg.hooks
             runner_type = "claude"
@@ -1256,17 +1272,36 @@ class Orchestrator:
             # Build env vars for the agent subprocess from workflow.yaml config
             agent_env = self.cfg.agent_env()
 
-            # State machine mode: single turn per dispatch. The state
-            # machine handles continuation via _transition after each
-            # turn completes — multi-turn loops would bypass gate
-            # transitions and cause the agent to blow past stage
-            # boundaries.
-            if state_name and state_cfg:
+            # One work turn per dispatch, plus an optional post-run lifecycle-only
+            # turn when ``effective_post_run`` is true.
+            post_run_planned = effective_post_run(state_cfg)
+            attempt = await run_turn(
+                runner_type=runner_type,
+                claude_cfg=claude_cfg,
+                hooks_cfg=hooks_cfg,
+                prompt=prompt,
+                workspace_path=ws.path,
+                issue=issue,
+                attempt=attempt,
+                on_event=self._on_agent_event,
+                on_pid=self._on_child_pid,
+                env=agent_env,
+                log_agent_output_dir=self._log_agent_output_dir,
+                run_after_hook=not post_run_planned,
+            )
+            if attempt.status == "succeeded" and post_run_planned:
+                post_prompt = await self._render_post_run_prompt_async(
+                    issue=issue,
+                    state_name=state_name,
+                    workflow=workflow,
+                    previous_error=attempt.previous_error,
+                    workspace_path=ws.path,
+                )
                 attempt = await run_turn(
                     runner_type=runner_type,
                     claude_cfg=claude_cfg,
                     hooks_cfg=hooks_cfg,
-                    prompt=prompt,
+                    prompt=post_prompt,
                     workspace_path=ws.path,
                     issue=issue,
                     attempt=attempt,
@@ -1274,52 +1309,8 @@ class Orchestrator:
                     on_pid=self._on_child_pid,
                     env=agent_env,
                     log_agent_output_dir=self._log_agent_output_dir,
+                    run_before_hook=False,
                 )
-            else:
-                # Legacy mode: multi-turn loop
-                max_turns = claude_cfg.max_turns
-                for turn in range(max_turns):
-                    if turn > 0:
-                        current_state = issue.state
-                        try:
-                            client = self._ensure_tracker_client()
-                            states = await client.fetch_issue_states_by_ids([issue.id])
-                            current_state = states.get(issue.id, issue.state)
-                            state_lower = current_state.strip().lower()
-                            active_lower = [
-                                s.strip().lower() for s in self.cfg.active_linear_states()
-                            ]
-                            if state_lower not in active_lower:
-                                logger.info(
-                                    f"Issue {issue.identifier} no longer active "
-                                    f"(state={current_state}), stopping"
-                                )
-                                break
-                        except Exception as e:
-                            logger.warning(f"State check failed, continuing: {e}")
-
-                        prompt = (
-                            f"Continue working on {issue.identifier}. "
-                            f"The issue is still in '{current_state}' state. "
-                            f"Check your progress and continue the task."
-                        )
-
-                    attempt = await run_turn(
-                        runner_type=runner_type,
-                        claude_cfg=claude_cfg,
-                        hooks_cfg=hooks_cfg,
-                        prompt=prompt,
-                        workspace_path=ws.path,
-                        issue=issue,
-                        attempt=attempt,
-                        on_event=self._on_agent_event,
-                        on_pid=self._on_child_pid,
-                        env=agent_env,
-                        log_agent_output_dir=self._log_agent_output_dir,
-                    )
-
-                    if attempt.status != "succeeded":
-                        break
 
             self._on_worker_exit(issue, attempt)
 
@@ -1411,6 +1402,75 @@ class Orchestrator:
 
         # Legacy fallback
         return await self._render_prompt(issue, attempt_num, state_name, workflow)
+
+    async def _render_post_run_prompt_async(
+        self,
+        issue: Issue,
+        state_name: str | None,
+        workflow: WorkflowConfig | None,
+        previous_error: str | None,
+        workspace_path: Path | None,
+    ) -> str:
+        """Render post-run lifecycle only (no global/stage layers).
+
+        Template path: ``workflow.prompts.lifecycle_post_run_prompt`` or default
+        ``prompts/lifecycle-post-run.md`` (see ``PromptsConfig.resolved_lifecycle_post_run_prompt``),
+        loaded and rendered by ``assemble_post_run_lifecycle_prompt`` in ``prompt.py``.
+        """
+        if workflow is None:
+            try:
+                workflow = self.cfg.get_workflow_for_issue(issue)
+            except ValueError as e:
+                logger.error(
+                    "Post-run prompt render failed — no workflow for %s: %s",
+                    issue.identifier,
+                    e,
+                )
+                raise RuntimeError(
+                    f"No workflow configured for issue with labels {getattr(issue, 'labels', [])}"
+                ) from e
+
+        workflow_states = workflow.states
+        workflow_prompts = workflow.prompts
+
+        if not state_name or state_name not in workflow_states:
+            raise RuntimeError(
+                f"Post-run prompt: invalid state_name {state_name!r} for {issue.identifier}"
+            )
+
+        state_cfg = workflow_states[state_name]
+        run = self._issue_state_runs.get(issue.id, 1)
+
+        comments: list[dict] | None = None
+        is_rework = False
+        try:
+            client = self._ensure_tracker_client()
+            comments = await self._load_issue_comments(client, issue, workspace_path)
+            tracking = parse_latest_tracking(comments)
+            if tracking and tracking.get("type") == "gate" and tracking.get("status") == "rework":
+                rework_to = tracking.get("rework_to")
+                if not rework_to:
+                    gate_state = tracking.get("state")
+                    gate_cfg = workflow_states.get(gate_state) if gate_state else None
+                    rework_to = gate_cfg.rework_to if gate_cfg else None
+                is_rework = bool(rework_to and rework_to == state_name)
+        except Exception as e:
+            logger.warning("Failed to fetch comments for post-run prompt: %s", e)
+
+        return await assemble_post_run_lifecycle_prompt(
+            cfg=self.cfg,
+            workflow_dir=str(self.workflow_path.parent),
+            issue=issue,
+            state_name=state_name,
+            state_cfg=state_cfg,
+            workflow_states=workflow_states,
+            workflow_prompts=workflow_prompts,
+            run=run,
+            is_rework=is_rework,
+            comments=comments,
+            previous_error=previous_error,
+            workspace_path=workspace_path,
+        )
 
     async def _render_prompt(
         self,

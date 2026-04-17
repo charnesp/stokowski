@@ -4,9 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from stokowski.config import LinearStatesConfig, PromptsConfig, ServiceConfig, StateConfig
+from stokowski.config import (
+    LinearStatesConfig,
+    PromptsConfig,
+    ServiceConfig,
+    StateConfig,
+    parse_workflow_file,
+)
 from stokowski.models import Issue
 from stokowski.prompt import (
+    assemble_post_run_lifecycle_prompt,
     assemble_prompt,
     build_image_references,
     build_lifecycle_context,
@@ -148,10 +155,10 @@ class TestBuildLifecycleSection:
         assert "fail:rework" in result
 
     @pytest.mark.asyncio
-    async def test_agent_gate_lifecycle_includes_routing_contract(self):
-        """Agent-gate states document STOKOWSKI_ROUTE markers, report tags, and keys."""
+    async def test_agent_gate_post_run_lifecycle_includes_routing_contract(self):
+        """Post-run template carries report + routing markers for two-turn agent-gate."""
         repo_root = Path(__file__).resolve().parent.parent
-        lifecycle_template = (repo_root / "prompts" / "lifecycle.md").read_text()
+        post_template = (repo_root / ".stokowski" / "prompts" / "lifecycle-post-run.md").read_text()
         issue = Issue(
             id="test-123",
             identifier="PROJ-1",
@@ -161,16 +168,18 @@ class TestBuildLifecycleSection:
         state_cfg = StateConfig(
             name="route",
             type="agent-gate",
+            post_run=True,
             prompt="prompts/route.md",
             default_transition="to_human",
             transitions={"findings": "fix", "to_human": "human"},
         )
         result = await build_lifecycle_section(
-            lifecycle_template=lifecycle_template,
+            lifecycle_template=post_template,
             issue=issue,
             state_name="route",
             state_cfg=state_cfg,
             linear_states=LinearStatesConfig(),
+            lifecycle_phase="post",
         )
         lower = result.lower()
         assert "<<<stokowski_route>>>" in lower
@@ -178,6 +187,81 @@ class TestBuildLifecycleSection:
         assert "<stokowski:report>" in lower
         assert "findings" in result
         assert "to_human" in result
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_phase_pre_and_post_in_context(self):
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+        sc = StateConfig(name="implement", type="agent")
+        pre = build_lifecycle_context(
+            issue=issue,
+            state_name="implement",
+            state_cfg=sc,
+            linear_states=LinearStatesConfig(),
+            lifecycle_phase="pre",
+        )
+        post = build_lifecycle_context(
+            issue=issue,
+            state_name="implement",
+            state_cfg=sc,
+            linear_states=LinearStatesConfig(),
+            lifecycle_phase="post",
+        )
+        assert pre["lifecycle_phase"] == "pre"
+        assert post["lifecycle_phase"] == "post"
+
+    @pytest.mark.asyncio
+    async def test_assemble_post_run_omits_global_prompt(self, tmp_path: Path):
+        """Post-run assembly is lifecycle-only (no global/stage layers)."""
+        wf = tmp_path / "workflow.yaml"
+        wf.write_text(
+            """
+tracker:
+  project_slug: p
+workflows:
+  w:
+    default: true
+    prompts:
+      global_prompt: prompts/global.md
+      lifecycle_prompt: prompts/lifecycle.md
+    states:
+      s:
+        type: agent
+        prompt: prompts/stage.md
+        transitions:
+          complete: t
+      t:
+        type: terminal
+        linear_state: terminal
+"""
+        )
+        pdir = tmp_path / "prompts"
+        pdir.mkdir()
+        (pdir / "global.md").write_text("GLOBAL_SHOULD_NOT_APPEAR")
+        (pdir / "stage.md").write_text("STAGE_SHOULD_NOT_APPEAR")
+        (pdir / "lifecycle.md").write_text("PRE_PHASE {{ lifecycle_phase }}")
+        (pdir / "lifecycle-post-run.md").write_text("POST_PHASE {{ lifecycle_phase }}")
+
+        cfg = parse_workflow_file(wf).config
+        wf_cfg = cfg.workflows["w"]
+        issue = Issue(id="1", identifier="X-1", title="t", state="In Progress", labels=[])
+        st = wf_cfg.states["s"]
+        out = await assemble_post_run_lifecycle_prompt(
+            cfg=cfg,
+            workflow_dir=tmp_path,
+            issue=issue,
+            state_name="s",
+            state_cfg=st,
+            workflow_states=wf_cfg.states,
+            workflow_prompts=wf_cfg.prompts,
+        )
+        assert "GLOBAL_SHOULD_NOT_APPEAR" not in out
+        assert "STAGE_SHOULD_NOT_APPEAR" not in out
+        assert "POST_PHASE post" in out
 
     @pytest.mark.asyncio
     async def test_renders_recent_comments(self):
@@ -276,6 +360,7 @@ class TestLifecycleContext:
         assert "transitions" in context
         assert "has_gate_transition" in context
         assert "gate_targets" in context
+        assert context.get("lifecycle_phase") == "pre"
 
     def test_agent_gate_context_flags(self):
         """Agent-gate exposes is_agent_gate and default transition key to templates."""
@@ -291,6 +376,7 @@ class TestLifecycleContext:
             state_cfg=StateConfig(
                 name="route",
                 type="agent-gate",
+                post_run=False,
                 prompt="p.md",
                 default_transition="fallback",
                 transitions={"a": "b"},

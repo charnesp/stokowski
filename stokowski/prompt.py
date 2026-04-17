@@ -131,6 +131,7 @@ def build_lifecycle_context(
     recent_comments: list[dict[str, Any]] | None = None,
     previous_error: str | None = None,
     include_images: bool = True,
+    lifecycle_phase: str = "pre",
 ) -> dict[str, Any]:
     """Build the extended template context with lifecycle-specific variables.
 
@@ -147,6 +148,8 @@ def build_lifecycle_context(
         recent_comments: Non-tracking comments since last run.
         previous_error: Error message from the previous failed attempt.
         include_images: Whether to include image references in context.
+        lifecycle_phase: ``pre`` for the primary work prompt lifecycle; ``post`` for the
+            follow-up closure prompt when two-turn post-run is enabled.
 
     Returns:
         Dict with all lifecycle-specific template variables.
@@ -186,6 +189,7 @@ def build_lifecycle_context(
             ),
             "has_images": has_images,
             "image_references": image_references,
+            "lifecycle_phase": lifecycle_phase,
         }
     )
 
@@ -205,6 +209,7 @@ async def build_lifecycle_section(
     previous_error: str | None = None,
     embed_images: bool = True,
     workspace_path: Path | None = None,
+    lifecycle_phase: str = "pre",
 ) -> str:
     """Render the lifecycle section from an external template.
 
@@ -222,7 +227,9 @@ async def build_lifecycle_section(
         is_rework: Whether this is a rework run after gate rejection.
         recent_comments: Non-tracking comments since last run.
         previous_error: Error message from the previous failed attempt.
-        embed_images: Whether to embed images as base64 in the output.
+        embed_images: Whether to embed comment-sourced images after render (and include
+            image metadata in context when True).
+        lifecycle_phase: ``pre`` or ``post`` for template conditionals.
 
     Returns:
         The rendered lifecycle section as a markdown string.
@@ -237,6 +244,8 @@ async def build_lifecycle_section(
         is_rework=is_rework,
         recent_comments=recent_comments,
         previous_error=previous_error,
+        include_images=embed_images,
+        lifecycle_phase=lifecycle_phase,
     )
 
     # Render the lifecycle template
@@ -353,7 +362,9 @@ async def assemble_prompt(
     elif state_cfg.prompt:
         log.info("Skipped stage prompt for '%s' due to prompt mode: %s", state_name, stage_mode)
 
-    # Layer 3: Lifecycle injection
+    # Layer 3: Pre-run lifecycle only (closure/report contract lives in the optional
+    # post-run follow-up turn when ``effective_post_run`` is true for this state).
+    # Resumed sessions still use this pre-run layer as today; post-run is not injected here.
     # Filter comments to recent non-tracking ones
     recent: list[dict[str, Any]] = []
     if comments:
@@ -377,10 +388,60 @@ async def assemble_prompt(
         recent_comments=recent,
         previous_error=previous_error,
         workspace_path=workspace_path,
+        lifecycle_phase="pre",
     )
     parts.append(lifecycle)
 
     return "\n\n".join(parts)
+
+
+async def assemble_post_run_lifecycle_prompt(
+    cfg: ServiceConfig,
+    workflow_dir: str | Path,
+    issue: Issue,
+    state_name: str,
+    state_cfg: StateConfig,
+    workflow_states: dict[str, Any],
+    workflow_prompts: PromptsConfig | None = None,
+    run: int = 1,
+    is_rework: bool = False,
+    comments: list[dict[str, Any]] | None = None,
+    previous_error: str | None = None,
+    workspace_path: Path | None = None,
+) -> str:
+    """Build the follow-up post-run user prompt (lifecycle closure layer only).
+
+    Omits global and stage prompts per product design: the work turn already carried
+    stage instructions; this turn locks structured report and git contract. Does not
+    embed comment-sourced images (``embed_images=False``).
+
+    Resolves the markdown path via ``prompts.resolved_lifecycle_post_run_prompt()`` —
+    default relative path ``prompts/lifecycle-post-run.md`` next to ``workflow.yaml``.
+    """
+    prompts = workflow_prompts if workflow_prompts is not None else cfg.prompts
+    post_path = prompts.resolved_lifecycle_post_run_prompt()
+    lifecycle_template = load_prompt_file(post_path, workflow_dir)
+
+    recent: list[dict[str, Any]] = []
+    if comments:
+        last_ts = get_last_gate_waiting_timestamp(comments) or get_last_tracking_timestamp(comments)
+        recent = get_comments_since(comments, last_ts)
+
+    return await build_lifecycle_section(
+        lifecycle_template=lifecycle_template,
+        issue=issue,
+        state_name=state_name,
+        state_cfg=state_cfg,
+        linear_states=cfg.linear_states,
+        workflow_states=workflow_states,
+        run=run,
+        is_rework=is_rework,
+        recent_comments=recent,
+        previous_error=previous_error,
+        embed_images=False,
+        workspace_path=workspace_path,
+        lifecycle_phase="post",
+    )
 
 
 async def embed_images_in_prompt(

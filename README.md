@@ -167,7 +167,7 @@ Linear issue → isolated git clone → agent (Claude or Codex) → PR + Human R
 - **Multi-workflow** — route issues to different state machines using Linear labels (`workflows:` in YAML); optional `default: true` fallback; backward-compatible single pipeline without `workflows:`
 - **Agent-gate** — after one agent turn, choose the next state automatically from structured output (`<<<STOKOWSKI_ROUTE>>>` JSON); safe fallback to a human gate and `route-error` comment on parse failure
 - **Multi-runner** — Claude Code and Codex in the same pipeline; different states can use different runners and models (e.g. Opus for investigation, Sonnet for implementation, Codex for review)
-- **Three-layer prompt assembly** — global prompt + per-stage prompt + auto-injected lifecycle context; each layer is a Jinja2 template with full issue variables
+- **Three-layer prompt assembly** — global prompt + per-stage prompt + auto-injected **pre-run** lifecycle context; for `agent` states (and `agent-gate` when `post_run: true`), a **second** runner turn may follow with only the **post-run** lifecycle template (structured report / `git` contract), so the model sees pre → work → post instead of one overloaded prompt
 - **Linear-driven dispatch** — polls for issues in configured states, dispatches agents with bounded concurrency
 - **Session continuity** — multi-turn agent sessions via `--resume` (Claude Code); agents pick up where they left off
 - **Isolated workspaces** — per-issue git clones so parallel agents never conflict
@@ -524,7 +524,7 @@ When your team uses **different pipelines** for different kinds of work (bugs vs
 
 **Per-workflow settings**
 
-Each workflow typically defines its own `states`, `prompts` (`global_prompt`, `lifecycle_prompt`), and may override **`max_concurrent_agents`** and **`max_concurrent_agents_by_state`**. Linear state mapping (`linear_states`), `tracker`, `workspace`, root `hooks`, and root `claude` defaults are usually **shared** at the top level of the file.
+Each workflow typically defines its own `states`, `prompts` (`global_prompt`, `lifecycle_prompt`, optional `lifecycle_post_run_prompt`), and may override **`max_concurrent_agents`** and **`max_concurrent_agents_by_state`**. Runner states (`agent` / `agent-gate`) may set **`post_run: true|false`** (`agent` defaults to **true** when omitted; every **`agent-gate`** must set it explicitly — typical routing gates use **`post_run: false`** so report and routing stay in the stage prompt). Linear state mapping (`linear_states`), `tracker`, `workspace`, root `hooks`, and root `claude` defaults are usually **shared** at the top level of the file.
 
 **Backward compatibility**
 
@@ -554,7 +554,7 @@ workflows:
 
 ## Agent-gate states (machine routing)
 
-An **`agent-gate`** state is like an **`agent`** state (same runner, one turn, same prompts), but when the turn **succeeds**, Stokowski **does not** always follow a fixed `complete` transition. Instead it reads a **routing decision** from the model output and calls the matching transition key.
+An **`agent-gate`** state is like an **`agent`** state (same runner and prompt assembly for the **work** turn), but when the run **succeeds**, Stokowski **does not** follow a fixed `complete` transition. Instead it reads a **routing decision** from the model output and calls the matching transition key. **`post_run` is required in YAML:** use **`post_run: false`** for the usual single-turn gate (report + routing live in the stage `prompt`); use **`post_run: true`** only if you want the same two-turn closure sequence as `agent` states (canonical report parsed from the **post** turn).
 
 **When to use it**
 
@@ -568,6 +568,7 @@ An **`agent-gate`** state is like an **`agent`** state (same runner, one turn, s
 | `type: agent-gate` | Enables routing behaviour |
 | `transitions` | Map of **logical keys** → **target state names** (must exist in the same workflow) |
 | `default_transition` | One of those keys; its **target state must be `type: gate`** — used when the block is missing, JSON is invalid, or the key is unknown |
+| `post_run` | **Required** boolean. **`false`** — one runner turn; parse report and routing from that output. **`true`** — after a successful work turn, run a **post-run** lifecycle-only follow-up; parse the canonical report (and routing, if applicable) from that second output |
 
 Forbidden on `agent-gate` (same as gates): `rework_to`, `max_rework` — human rework is expressed via the gate you route into.
 
@@ -591,7 +592,7 @@ Claude Code emits **NDJSON**: each line is a JSON object; user-visible text live
 **On failure**
 
 - Stokowski posts a **`route-error`** comment (with encoded detail) and applies **`default_transition`** (the gate you configured for human follow-up).
-- Fix prompts so the model always emits both the report and a non-empty JSON line between the markers; see `prompts/lifecycle.md` (`is_agent_gate`) and `prompts/feature/review-findings-route.md` for examples.
+- Fix prompts so the model always emits both the report and a non-empty JSON line between the markers; for two-turn `agent` states see `.stokowski/prompts/lifecycle-post-run.md`; for typical **`post_run: false`** gates, keep both in the stage prompt (e.g. `prompts/feature/review-findings-route.md`).
 
 ---
 
@@ -607,7 +608,7 @@ The startup panel states explicitly that this applies only to the **Claude** run
 
 ## Work reports on Linear
 
-After a turn ends, Stokowski can post a **Work Report** comment on the issue. The body is taken from `<stokowski:report>...</stokowski:report>` in the agent output when present, or a short fallback if the tags are missing.
+After a dispatch finishes, Stokowski can post a **Work Report** comment on the issue. The body is taken from `<stokowski:report>...</stokowski:report>` in the **final** runner output when present (when **`post_run`** is enabled for the state, that is the **post-run** turn, not the intermediate work turn), or a short fallback if the tags are missing.
 
 **Turn timeout** (`turn_timeout_ms`) and **stall** (`stall_timeout_ms`) end the run with status `timed_out` or `stalled`. Those outcomes are treated as **incomplete**: Stokowski **does not** post a Work Report comment, because a **retry** is scheduled and partial stream text is usually not a useful Linear artifact. Use **verbose logging** or **`--log-agent-output`** to inspect what the agent emitted before the kill.
 
@@ -651,7 +652,7 @@ hooks:
   after_create: |                       # runs once when a new workspace is created
     git clone --depth 1 git@github.com:org/repo.git .
     npm install
-  before_run: |                         # runs before each agent turn (clean tree only)
+  before_run: |                         # runs once before the **work** agent turn (not before post-run)
     git fetch origin main || exit 1
     if [ -z "$(git status --porcelain)" ]; then
       if git merge-base --is-ancestor HEAD origin/main; then
@@ -660,8 +661,10 @@ hooks:
         git rebase origin/main || exit 1
       fi
     fi
-  after_run: |                          # runs after each agent turn (quality gate)
+  after_run: |                          # runs once after the **last** turn of a dispatch (after post-run when two-turn closure applies; not between work and post-run)
     npm test 2>&1 | tail -20
+  # If `post_run` is true for the state but the **work** turn does not succeed, there is no
+  # post-run follow-up turn and **`after_run` does not run** (no backup hook after a failed work attempt).
   before_remove: |                      # runs before workspace is deleted
     echo "cleaning up"
   on_stage_enter: |                     # runs when an issue enters a new stage
@@ -679,7 +682,7 @@ claude:
     - Glob
     - Grep
   model: claude-sonnet-4-6             # optional model override
-  max_turns: 20                         # max turns before giving up
+  max_turns: 20                         # parsed / merged; not used to cap orchestrator turns (one work + optional post-run per dispatch). Claude session length uses --resume, not this counter.
   turn_timeout_ms: 3600000             # per-turn wall-clock timeout (default: 1h)
   stall_timeout_ms: 300000             # kill agent if silent for this long (default: 5m)
   append_system_prompt: |              # extra text appended to every agent's system prompt
@@ -695,7 +698,8 @@ agent:
 
 prompts:
   global_prompt: prompts/global.md     # loaded for every agent turn (optional)
-  lifecycle_prompt: prompts/lifecycle.md  # required. Template for lifecycle injection
+  lifecycle_prompt: prompts/lifecycle.md  # required. Pre-run lifecycle (Layer 3 of the work prompt)
+  # lifecycle_post_run_prompt: prompts/lifecycle-post-run.md  # optional; default path if omitted
 
 states:                                # the state machine pipeline
   investigate:
@@ -759,8 +763,8 @@ states:                                # the state machine pipeline
 
 | Type | Has prompt | What Stokowski does |
 |------|-----------|---------------------|
-| `agent` (default) | Yes | Dispatches a runner (Claude Code or Codex), runs turns, follows `transitions.complete` on success |
-| `agent-gate` | Yes | One runner turn like `agent`; on success parses `<<<STOKOWSKI_ROUTE>>>` … `<<<END_STOKOWSKI_ROUTE>>>` JSON and follows the matching `transitions` key, or `default_transition` on failure (see [Agent-gate states](#agent-gate-states-machine-routing)) |
+| `agent` (default) | Yes | Dispatches a runner; on success follows `transitions.complete`. When **`post_run`** is true (default if omitted), may run a **second** turn with only the post-run lifecycle template before transitioning |
+| `agent-gate` | Yes | Like `agent` for the work turn; on success parses `<<<STOKOWSKI_ROUTE>>>` … JSON and follows the matching `transitions` key, or `default_transition` on failure. **`post_run`** is required: **`false`** = single turn (typical); **`true`** = two-turn closure like `agent` (see [Agent-gate states](#agent-gate-states-machine-routing)) |
 | `gate` | No | Moves issue to review Linear state, waits for human. Follows `transitions.approve` on Gate Approved, `rework_to` on Rework |
 | `terminal` | No | Moves issue to terminal Linear state, deletes workspace |
 
@@ -773,7 +777,7 @@ When using multiple pipelines, define **`workflows:`** as a mapping of workflow 
 | `label` | Yes (unless only `default: true`) | Linear label string; first match in file order wins |
 | `default` | No | If `true`, used when no `label` matches |
 | `states` | Yes | Same shape as root `states` in a single-workflow file |
-| `prompts` | Yes | `global_prompt` (optional), `lifecycle_prompt` (required) |
+| `prompts` | Yes | `global_prompt` (optional), `lifecycle_prompt` (required, pre-run), `lifecycle_post_run_prompt` (optional; defaults to `prompts/lifecycle-post-run.md`) |
 | `max_concurrent_agents` | No | Override global concurrency for this workflow |
 | `max_concurrent_agents_by_state` | No | Per-state caps within this workflow |
 
@@ -787,7 +791,7 @@ Each state can override these fields from the root `claude` / `hooks` defaults. 
 |-------|---------|-------------|
 | `runner` | `claude` | `claude` (Claude Code CLI) or `codex` (Codex CLI) |
 | `model` | root `claude.model` | Model override for this state |
-| `max_turns` | root `claude.max_turns` | Max turns for this state |
+| `max_turns` | root `claude.max_turns` | Parsed for compatibility; orchestrator does not run a multi-turn loop from this value (see root `claude.max_turns` comment) |
 | `turn_timeout_ms` | root value | Per-turn timeout |
 | `stall_timeout_ms` | root value | Stall detection timeout |
 | `session` | `inherit` | `inherit` (resume prior session) or `fresh` (new session, no prior context) |
@@ -865,22 +869,23 @@ All three layers receive the same template context with the `issue` object:
 | `{{ attempt }}` | Retry attempt within this run |
 | `{{ last_run_at }}` | ISO 8601 timestamp of the last completed agent run for this issue (empty string on first run) |
 
-The lifecycle section is appended automatically — you don't need to include it in your prompt files. It provides the agent with available transitions, rework feedback, and recent Linear comments.
+The **pre-run** lifecycle section is appended automatically to the **work** prompt — you don't need to duplicate it in stage files. It provides issue context, available transitions, rework feedback, and recent Linear comments. When **`post_run`** is true, the **post-run** template (default path `prompts/lifecycle-post-run.md` next to `workflow.yaml`, or `lifecycle_post_run_prompt`) is sent as a **separate** follow-up runner turn with **no** global or stage layers; comment images are **not** re-embedded on that turn.
 
-**Custom lifecycle templates** (`prompts.lifecycle_prompt`) receive additional lifecycle-specific variables:
+**Custom lifecycle templates** (`prompts.lifecycle_prompt` for pre-run; optional `lifecycle_post_run_prompt` for post-run) receive additional lifecycle-specific variables:
 
 | Variable | Description |
 |----------|-------------|
+| `{{ lifecycle_phase }}` | `pre` while rendering the work prompt lifecycle; `post` on the post-run follow-up turn |
 | `{{ previous_error }}` | Error message from previous failed attempt (empty if none) |
 | `{{ is_rework }}` | `true` if this is a rework run after gate rejection |
 | `{{ recent_comments }}` | List of recent non-tracking Linear comments since last run |
 | `{{ transitions }}` | Dictionary mapping trigger names to target state names |
 | `{{ has_gate_transition }}` | `true` if any transition leads to a gate state |
 | `{{ gate_targets }}` | List of `(trigger, target)` tuples for gate transitions |
-| `{{ is_agent_gate }}` | `true` when the current state is `type: agent-gate` — show routing marker instructions |
+| `{{ is_agent_gate }}` | `true` when the current state is `type: agent-gate` — show routing marker instructions in templates that include them |
 | `{{ agent_gate_default_transition }}` | Name of `default_transition` for agent-gate states (empty string otherwise) |
 
-Use these to customize the lifecycle injection section that appears at the end of every agent prompt. See `prompts/lifecycle.md` for an example template.
+Use these to customize the pre-run and post-run lifecycle files. See `.stokowski/prompts/lifecycle.md` and `.stokowski/prompts/lifecycle-post-run.md` in this repository for defaults.
 
 ---
 
@@ -980,7 +985,7 @@ This is formalised in OpenAI's [Harness Engineering](https://openai.com/index/ha
 - A thorough `CLAUDE.md` covering architecture, conventions, and agent anti-patterns
 - Rule files (e.g. `.claude/rules/agent-pitfalls.md`) for codebase-specific failure modes
 - Acceptance criteria in ticket descriptions so agents can self-verify before moving to Human Review
-- Quality gate hooks (`before_run`, `after_run`) that catch regressions each turn
+- Quality gate hooks (`before_run`, `after_run`) tied to each **dispatch** (before the work runner turn and after the last runner turn — not “every” ambiguous turn, and not between work and post-run)
 - A `docs/build-log.md` agents are instructed to maintain — keeping the codebase self-documenting over time
 
 ---
@@ -1005,8 +1010,8 @@ prompts/       →  Jinja2 stage prompt files
           ▼
     Workspace Manager
     ├── after_create hook  →  git clone, npm install, etc.
-    ├── before_run hook    →  git pull, typecheck, etc.
-    └── after_run hook     →  tests, lint, etc.
+    ├── before_run hook    →  before work turn only (skipped before post-run follow-up)
+    └── after_run hook     →  after final turn (post-run if any, else single work turn)
           │
           ▼
     Agent Runner (per-state configurable)

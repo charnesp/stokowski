@@ -7,6 +7,7 @@ import textwrap
 from stokowski.config import (
     ServiceConfig,
     StateConfig,
+    effective_post_run,
     parse_workflow_file,
     validate_config,
 )
@@ -33,6 +34,7 @@ states:
       complete: route
   route:
     type: agent-gate
+    post_run: false
     prompt: prompts/route.md
     default_transition: escalate
     transitions:
@@ -62,6 +64,8 @@ class TestAgentGateParsing:
         cfg = _parse(tmp_path, TRACKER + _valid_legacy_states())
         route = cfg.states["route"]
         assert route.type == "agent-gate"
+        assert route.post_run is False
+        assert effective_post_run(route) is False
         assert route.default_transition == "escalate"
         assert route.transitions == {
             "findings": "fix",
@@ -79,6 +83,36 @@ class TestAgentGateValidationLegacy:
         errors = validate_config(cfg, skip_secrets_check=True)
         assert errors == [], f"unexpected errors: {errors}"
 
+    def test_agent_gate_missing_post_run_rejected(self, tmp_path):
+        yaml = (
+            TRACKER
+            + """
+states:
+  start:
+    type: agent
+    prompt: prompts/start.md
+    transitions:
+      complete: route
+  route:
+    type: agent-gate
+    prompt: prompts/route.md
+    default_transition: human
+    transitions:
+      x: human
+  human:
+    type: gate
+    linear_state: review
+    rework_to: start
+    transitions:
+      approve: done
+  done:
+    type: terminal
+"""
+        )
+        cfg = _parse(tmp_path, yaml)
+        errors = validate_config(cfg, skip_secrets_check=True)
+        assert any("post_run" in e.lower() for e in errors), errors
+
     def test_missing_default_transition_rejected(self, tmp_path):
         yaml = (
             TRACKER
@@ -91,6 +125,7 @@ states:
       complete: route
   route:
     type: agent-gate
+    post_run: false
     prompt: prompts/route.md
     transitions:
       a: human
@@ -120,6 +155,7 @@ states:
       complete: route
   route:
     type: agent-gate
+    post_run: false
     prompt: prompts/route.md
     default_transition: to_fix
     transitions:
@@ -156,6 +192,7 @@ states:
       complete: route
   route:
     type: agent-gate
+    post_run: false
     prompt: prompts/route.md
     default_transition: human
     rework_to: start
@@ -187,6 +224,7 @@ states:
       complete: route
   route:
     type: agent-gate
+    post_run: false
     prompt: prompts/route.md
     default_transition: human
     transitions:
@@ -218,6 +256,7 @@ states:
       complete: route
   route:
     type: agent-gate
+    post_run: false
     prompt: prompts/route.md
     default_transition: missing_key
     transitions:
@@ -258,6 +297,7 @@ workflows:
           complete: route
       route:
         type: agent-gate
+        post_run: false
         prompt: prompts/r.md
         default_transition: to_human
         transitions:
@@ -283,6 +323,7 @@ workflows:
           complete: ag
       ag:
         type: agent-gate
+        post_run: false
         prompt: prompts/ag.md
         default_transition: to_gate
         transitions:
@@ -323,6 +364,7 @@ class TestAgentGateProgrammaticValidation:
         route = StateConfig(
             name="route",
             type="agent-gate",
+            post_run=False,
             prompt="r.md",
             default_transition="human",
             transitions={"x": "human"},
@@ -357,6 +399,7 @@ class TestAgentGateProgrammaticValidation:
         route = StateConfig(
             name="route",
             type="agent-gate",
+            post_run=False,
             prompt=None,
             default_transition="human",
             transitions={"x": "human"},
