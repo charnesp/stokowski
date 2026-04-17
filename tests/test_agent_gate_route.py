@@ -24,6 +24,7 @@ def _gate_state_cfg() -> StateConfig:
     return StateConfig(
         name="route",
         type="agent-gate",
+        post_run=False,
         prompt="p.md",
         default_transition="fallback",
         transitions={
@@ -84,6 +85,7 @@ class TestDecideAgentGateTransition:
         cfg = StateConfig(
             name="route",
             type="agent-gate",
+            post_run=False,
             prompt="p.md",
             default_transition=None,
             transitions={"first": "a", "second": "b"},

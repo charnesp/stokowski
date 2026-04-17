@@ -106,6 +106,7 @@ workflows:
     prompts:
       global_prompt: prompts/debug/global.md
       lifecycle_prompt: prompts/lifecycle.md
+      lifecycle_post_run_prompt: prompts/lifecycle-post-run.md
 
     # Per-workflow concurrency limits (optional, overrides global agent:)
     max_concurrent_agents: 4
@@ -158,6 +159,7 @@ workflows:
 
       review-findings-route:
         type: agent-gate
+        post_run: false
         prompt: prompts/common/review-findings-route.md
         linear_state: active
         default_transition: needs_human
@@ -209,6 +211,7 @@ workflows:
     prompts:
       global_prompt: prompts/feature/global.md
       lifecycle_prompt: prompts/lifecycle.md
+      lifecycle_post_run_prompt: prompts/lifecycle-post-run.md
 
     # Per-workflow concurrency limits
     max_concurrent_agents: 4
@@ -263,6 +266,7 @@ workflows:
       # clean → human merge gate. On invalid routing output, default sends to merge-review.
       review-findings-route:
         type: agent-gate
+        post_run: false
         prompt: prompts/common/review-findings-route.md
         linear_state: active
         default_transition: needs_human

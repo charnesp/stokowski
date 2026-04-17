@@ -128,7 +128,7 @@ server:
 #   - default: (optional) if true, this workflow is the fallback for issues
 #             without matching labels. Only one workflow can be default.
 #   - states: the state machine for this workflow
-#   - prompts: global_prompt and lifecycle_prompt for this workflow
+#   - prompts: global_prompt, lifecycle_prompt, optional lifecycle_post_run_prompt
 #
 # First matching workflow wins (YAML order matters).
 # If no workflow matches and no default exists, dispatch fails.
@@ -149,6 +149,7 @@ workflows:
     prompts:
       global_prompt: prompts/debug/global.md
       lifecycle_prompt: prompts/lifecycle.md
+      lifecycle_post_run_prompt: prompts/lifecycle-post-run.md
 
     # Per-workflow concurrency limits (optional, overrides global agent:)
     max_concurrent_agents: 2
@@ -210,6 +211,7 @@ workflows:
     prompts:
       global_prompt: prompts/feature/global.md
       lifecycle_prompt: prompts/lifecycle.md
+      lifecycle_post_run_prompt: prompts/lifecycle-post-run.md
 
     # Per-workflow concurrency limits
     max_concurrent_agents: 4
@@ -272,6 +274,7 @@ workflows:
       # clean → human merge gate. On invalid routing output, default sends to merge-review.
       review-findings-route:
         type: agent-gate
+        post_run: false
         prompt: prompts/feature/review-findings-route.md
         linear_state: active
         default_transition: needs_human
@@ -321,6 +324,7 @@ workflows:
     prompts:
       global_prompt: prompts/docs/global.md
       lifecycle_prompt: prompts/lifecycle.md
+      lifecycle_post_run_prompt: prompts/lifecycle-post-run.md
 
     max_concurrent_agents: 2
 

@@ -39,6 +39,7 @@ workflows:
           complete: route
       route:
         type: agent-gate
+        post_run: false
         prompt: prompts/route.md
         default_transition: to_human
         transitions:
@@ -635,6 +636,7 @@ states:
       complete: route
   route:
     type: agent-gate
+    post_run: false
     prompt: prompts/route.md
     default_transition: to_human
     transitions:
@@ -752,6 +754,7 @@ workflows:
           complete: route
       route:
         type: agent-gate
+        post_run: false
         prompt: prompts/route.md
         default_transition: to_human
         transitions:
@@ -776,6 +779,7 @@ workflows:
           complete: route
       route:
         type: agent-gate
+        post_run: false
         prompt: prompts/route.md
         default_transition: to_human
         transitions:

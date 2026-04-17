@@ -61,14 +61,14 @@ All state lives in memory. The orchestrator recovers from restart by re-polling 
 The operator's `workflow.yaml` defines the runtime config and state machine. Stokowski re-parses it on every poll tick — config changes take effect without restart. Both `.yaml` and legacy `.md` (YAML front matter + Jinja2 body) formats are supported. Prompt templates are now separate `.md` files referenced by path from the config.
 
 ### State machine workflow
-Each workflow defines a set of internal states that map to Linear states. States have types: `agent` (runs Claude Code), `agent-gate` (one runner turn, then a machine-chosen transition from structured stdout), `gate` (waits for human review), or `terminal` (issue complete). Transitions between states are declared explicitly in config.
+Each workflow defines a set of internal states that map to Linear states. States have types: `agent` (runs the configured runner), `agent-gate` (same runner stack, then a machine-chosen transition from structured stdout), `gate` (waits for human review), or `terminal` (issue complete). Transitions between states are declared explicitly in config.
 
-**Agent-gate:** Same runner stack and `prompt:` as `agent`. YAML requires `transitions` (named keys → target states), plus `default_transition` naming one of those keys whose **target** must be `type: gate` (human validation when routing fails). After success, Stokowski parses `<<<STOKOWSKI_ROUTE>>>` / `{"transition":"<key>"}` / `<<<END_STOKOWSKI_ROUTE>>>` from the runner output and calls `_safe_transition` with that key; it posts `<stokowski:report>` like a normal agent state. If parsing fails, it posts a `route-error` comment and uses `default_transition`. See `prompts/lifecycle.md` and `workflow.example.yaml`.
+**Agent-gate:** Same runner stack and `prompt:` as `agent`. YAML requires explicit **`post_run`** (`true` or `false`). Typical routing gates use **`post_run: false`** (one turn; report + `<<<STOKOWSKI_ROUTE>>>` live in the stage prompt). YAML also requires `transitions` (named keys → target states), plus `default_transition` naming one of those keys whose **target** must be `type: gate` (human validation when routing fails). After success, Stokowski parses routing from the **canonical** runner output (the post-run turn when `post_run: true`, otherwise the single work turn), calls `_safe_transition` with the chosen key, and posts `<stokowski:report>` from that same output. If parsing fails, it posts a `route-error` comment and uses `default_transition`. See `.stokowski/prompts/lifecycle-post-run.md`, `.stokowski/prompts/lifecycle.md`, and `workflow.example.yaml`.
 
-**Three-layer prompt assembly:** Prompt composition is session-aware. Fresh turns include all three layers; resumed turns always include lifecycle and may include stage only when entering a new stage in the resumed session:
+**Three-layer prompt assembly (work turn):** Prompt composition is session-aware. Fresh **work** turns include all three layers; resumed turns always include **pre-run** lifecycle and may include stage only when entering a new stage in the resumed session (post-run is only used after a successful work turn when `effective_post_run` is true — it is **not** part of resumed-session static prompt skipping; the follow-up is always the dedicated post-run template):
 1. **Global prompt** — shared context loaded from a `.md` file (referenced by `prompts.global_prompt`)
 2. **Stage prompt** — state-specific instructions loaded from the state's `prompt` path
-3. **Lifecycle injection** — auto-generated section with issue metadata, transitions, rework context, and recent comments
+3. **Pre-run lifecycle** — `prompts.lifecycle_prompt`: issue metadata, transitions, rework context, recent comments (`lifecycle_phase` = `pre`)
 
 **Gate protocol:** When an agent completes a state that transitions to a gate, Stokowski moves the issue to the gate's Linear state and posts a structured tracking comment. Humans approve or request rework via Linear state changes. On approval, Stokowski advances to the gate's `approve` transition target. On rework, it returns to the gate's `rework_to` state.
 
@@ -176,7 +176,7 @@ while running:
 **Reconciliation:** on each tick, fetches current states for all running issue IDs. If an issue moved to terminal state → cancel worker + clean workspace. If moved out of active states → cancel worker, release claim.
 
 **Retry logic:**
-- `succeeded` → schedule continuation retry in 1s (checks if more work needed)
+- `succeeded` → normally `_safe_transition` / further dispatch as implemented in `_on_worker_exit`; a **1s continuation retry** applies only to the legacy escape hatch when success occurs but `attempt.state_name` is missing from the workflow states used for that check
 - `failed/timed_out/stalled` → exponential backoff: `min(10000 * 2^(attempt-1), max_retry_backoff_ms)`
 - `canceled` → release claim immediately
 
@@ -236,11 +236,13 @@ Three-layer prompt assembly for state machine workflows. Main entry point is `as
 
 **`build_template_context(issue, state_name, run, attempt, last_run_at)`** builds the flat dict used for Jinja2 rendering. Includes: `issue_id`, `issue_identifier`, `issue_title`, `issue_description`, `issue_url`, `issue_priority`, `issue_state`, `issue_branch`, `issue_labels`, `state_name`, `run`, `attempt`, `last_run_at`.
 
-**`build_lifecycle_section()`** generates the auto-injected lifecycle section appended to every prompt. Includes issue metadata, rework context with review comments, recent activity, available transitions, and completion instructions. Clearly demarcated with HTML comments.
+**`build_lifecycle_section()`** renders a lifecycle markdown template with Jinja2 (`lifecycle_phase` `pre` or `post`, plus issue / transitions / comments context). Used for Layer 3 of `assemble_prompt()` (pre-run) and for `assemble_post_run_lifecycle_prompt()` (post-run only; `embed_images=False` so comment images are not attached on the closure turn).
 
-**`assemble_prompt()`** applies session-aware composition rules: global/stage/lifecycle on fresh turns; lifecycle-only on resumed same-stage turns; stage+lifecycle on resumed new-stage turns (global stays omitted on resume).
+**`assemble_prompt()`** applies session-aware composition rules for the **work** prompt: global / stage / pre-run lifecycle on fresh turns; pre-run lifecycle only on resumed same-stage turns; stage + pre-run lifecycle on resumed new-stage turns (global stays omitted on resume).
 
-**Image Support:** When comments include `downloaded_images`, `build_lifecycle_section()` automatically embeds them as base64 data URIs in the lifecycle section via `embed_images_in_prompt()`. Images are converted to markdown syntax `![title](data:mime_type;base64,...)` and appended to the lifecycle output. Limits apply: `max_images_per_comment` (default 5), `max_total_images` (default 20). The Jinja2 context includes `has_images` boolean and `image_references` list for templates that want custom image handling.
+**`assemble_post_run_lifecycle_prompt()`** loads `lifecycle_post_run_prompt` or the default `prompts/lifecycle-post-run.md` and renders it with `lifecycle_phase="post"` — no global or stage layers.
+
+**Image Support:** On the **work** turn, when comments include `downloaded_images`, `build_lifecycle_section()` may append image references via `embed_images_in_prompt()`. The Jinja2 context includes `has_images` and `image_references`. The **post-run** follow-up does not re-embed comment images.
 
 ### tracking.py
 State machine tracking via structured Linear comments:
@@ -262,8 +264,8 @@ workflow.yaml parsed → states + config loaded
         → RunAttempt created in self.running
         → _run_worker() task spawned
             → ensure_workspace() → after_create hook (git clone, npm install, etc.)
-            → assemble_prompt() → session-aware layering (fresh: global+stage+lifecycle; resumed same-stage: lifecycle only; resumed new-stage: stage+lifecycle)
-            → run_agent_turn() called in loop (up to max_turns)
+            → assemble_prompt() → session-aware layering for work turn (fresh: global+stage+pre lifecycle; resumed same-stage: pre lifecycle only; resumed new-stage: stage+pre lifecycle)
+            → run_turn() for work; on success, optional second run_turn() with post-run lifecycle only when state.post_run requests it
                 → build_claude_args() → claude -p subprocess
                 → NDJSON streamed: tool_use events, assistant messages, result
                 → session_id captured for next turn
