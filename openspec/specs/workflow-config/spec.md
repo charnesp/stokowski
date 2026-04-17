@@ -43,6 +43,33 @@ The system SHALL resolve prompt paths relative to the workflow.yaml directory.
 - **WHEN** a state defines `prompt: prompts/debug/reproduce.md`
 - **THEN** the system SHALL load from the resolved path
 
+### Requirement: Optional lifecycle post-run prompt path
+
+Workflow `prompts` configuration SHALL accept an optional string field `lifecycle_post_run_prompt` naming a Markdown file path relative to the directory containing `workflow.yaml`. When omitted, the effective path SHALL be `prompts/lifecycle-post-run.md` (see `PromptsConfig.resolved_lifecycle_post_run_prompt`).
+
+#### Scenario: Workflow-scoped post-run prompt
+
+- **WHEN** a workflow defines `prompts.lifecycle_post_run_prompt: prompts/lifecycle-post-run.md`
+- **THEN** the parsed `PromptsConfig` for that workflow SHALL store that path
+- **AND** the system SHALL resolve the file relative to the workflow.yaml directory when loading the post-run template
+
+#### Scenario: Legacy config omits post-run path
+
+- **WHEN** a workflow sets only `lifecycle_prompt` (and omits `lifecycle_post_run_prompt`)
+- **THEN** validation SHALL succeed
+- **AND** the pre-run template SHALL load from `lifecycle_prompt`
+- **AND** the resolved post-run template path SHALL be `prompts/lifecycle-post-run.md` for the post-run follow-up turn when `post_run` is effective
+
+### Requirement: Pre-run lifecycle prompt remains lifecycle_prompt
+
+The required field `lifecycle_prompt` SHALL designate the **pre-run** lifecycle Markdown template path. No new required YAML key SHALL replace `lifecycle_prompt` for backward compatibility.
+
+#### Scenario: Naming is backward compatible
+
+- **WHEN** existing configs use `lifecycle_prompt` only
+- **THEN** parsing and validation SHALL behave as before for that field
+- **AND** documentation MAY describe it as pre-run lifecycle
+
 ### Requirement: Parse agent-gate state type
 
 The system SHALL accept `type: agent-gate` in workflow state definitions and SHALL represent it in `StateConfig` with the same execution-related fields as `agent` states (`prompt`, `linear_state`, `runner`, optional overrides) where applicable.
@@ -93,9 +120,89 @@ Per-workflow validation SHALL run the new `agent-gate` rules alongside existing 
 
 Runner states **`agent`** and **`agent-gate`** SHALL support an optional boolean field **`post_run`**. When the field is **absent** from YAML, the effective value SHALL be **true** (orchestrator may run a post-run lifecycle-only follow-up turn after a successful work turn). When **`post_run: false`** is set explicitly, the orchestrator SHALL use a **single** runner turn for that state.
 
+#### Scenario: agent without post_run key
+
+- **WHEN** a state has `type: agent` and the YAML omits `post_run`
+- **THEN** the effective `post_run` SHALL be **true**
+- **AND** the orchestrator SHALL be eligible to run the post-run follow-up turn for that state
+
+#### Scenario: agent explicit opt-out
+
+- **WHEN** a state has `type: agent` and `post_run: false`
+- **THEN** the effective `post_run` SHALL be false
+- **AND** the orchestrator SHALL NOT run the post-run follow-up turn for that state
+
 #### Scenario: agent-gate without post_run key validates
 
 - **WHEN** a state has `type: agent-gate` and valid `transitions`, `default_transition`, and `prompt`
 - **AND** the YAML omits the `post_run` key
 - **THEN** `validate_config` SHALL NOT fail solely because `post_run` is missing
 - **AND** the effective post-run flag for that state SHALL be **true**
+
+#### Scenario: agent-gate explicit opt-out
+
+- **WHEN** a state has `type: agent-gate` and `post_run: false`
+- **THEN** validation SHALL succeed
+- **AND** the effective `post_run` SHALL be false
+
+#### Scenario: agent-gate explicit two-turn closure
+
+- **WHEN** a state has `type: agent-gate` and `post_run: true`
+- **THEN** validation SHALL succeed
+- **AND** the effective `post_run` SHALL be true
+
+### Requirement: Session mode influences prompt composition
+
+Workflow session mode SHALL determine static prompt inclusion (global + stage) for all turns.
+
+#### Scenario: New stage with fresh session
+
+- **WHEN** a non-rework turn targets a state configured with `session: fresh`
+- **THEN** the system SHALL start a new session
+- **AND** include global, stage, and lifecycle content in the assembled prompt
+
+#### Scenario: Rework prompt composition with inherited session
+
+- **WHEN** a rework turn targets a state configured with `session: inherit`
+- **AND** a resumable session id is available
+- **THEN** the system SHALL resume the prior session
+- **AND** omit global prompt content from the assembled prompt
+- **AND** include stage prompt content only when entering a new stage in that resumed session
+- **AND** keep lifecycle content in the assembled prompt
+
+#### Scenario: Non-rework prompt composition with inherited session
+
+- **WHEN** a non-rework turn targets a state configured with `session: inherit`
+- **AND** a resumable session id is available
+- **THEN** the system SHALL resume the prior session
+- **AND** omit global prompt content from the assembled prompt
+- **AND** include stage prompt content only when entering a new stage in that resumed session
+- **AND** keep lifecycle content in the assembled prompt
+
+#### Scenario: Rework prompt composition with fresh session
+
+- **WHEN** a rework turn targets a state configured with `session: fresh`
+- **THEN** the system SHALL start a new session
+- **AND** include global, stage, and lifecycle content in the assembled prompt
+
+#### Scenario: Rework stage + resume session, same stage
+
+- **WHEN** a rework turn resumes an existing session
+- **AND** the stage has not changed in that resumed session
+- **THEN** the system SHALL include lifecycle content only (omit global and stage)
+
+#### Scenario: Rework stage + resume session, new stage
+
+- **WHEN** a rework turn resumes an existing session
+- **AND** the workflow has entered a new stage in that resumed session
+- **THEN** the system SHALL include stage and lifecycle content
+- **AND** omit global content
+
+### Requirement: Stage prompt rendering receives rework context
+
+Workflow prompt rendering SHALL pass `is_rework` into stage prompt template rendering context.
+
+#### Scenario: Stage template uses rework branch
+
+- **WHEN** a stage prompt template references `is_rework`
+- **THEN** rendering SHALL evaluate template branches using the current turn's rework status

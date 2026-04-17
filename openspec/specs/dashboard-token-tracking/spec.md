@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+The web dashboard SHALL show **per-issue cumulative token usage** across turns within a run, **correct run/turn indicators**, and consistent values for issues **running** or **waiting at gates**. When an issue reaches a **terminal** state, the system SHALL drop in-memory token tracking for that issue.
+
+## Requirements
 
 ### Requirement: Per-issue cumulative token tracking
 The system SHALL maintain cumulative token usage per issue across all turns within a run.
