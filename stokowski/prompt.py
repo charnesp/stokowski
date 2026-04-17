@@ -132,6 +132,7 @@ def build_lifecycle_context(
     previous_error: str | None = None,
     include_images: bool = True,
     lifecycle_phase: str = "pre",
+    workflow_name: str = "",
 ) -> dict[str, Any]:
     """Build the extended template context with lifecycle-specific variables.
 
@@ -150,6 +151,8 @@ def build_lifecycle_context(
         include_images: Whether to include image references in context.
         lifecycle_phase: ``pre`` for the primary work prompt lifecycle; ``post`` for the
             follow-up closure prompt when two-turn post-run is enabled.
+        workflow_name: YAML workflow key (e.g. ``feature``) for lifecycle template conditionals;
+            empty for legacy or unknown.
 
     Returns:
         Dict with all lifecycle-specific template variables.
@@ -190,6 +193,7 @@ def build_lifecycle_context(
             "has_images": has_images,
             "image_references": image_references,
             "lifecycle_phase": lifecycle_phase,
+            "workflow_name": workflow_name or "",
         }
     )
 
@@ -210,6 +214,7 @@ async def build_lifecycle_section(
     embed_images: bool = True,
     workspace_path: Path | None = None,
     lifecycle_phase: str = "pre",
+    workflow_name: str = "",
 ) -> str:
     """Render the lifecycle section from an external template.
 
@@ -230,6 +235,7 @@ async def build_lifecycle_section(
         embed_images: Whether to embed comment-sourced images after render (and include
             image metadata in context when True).
         lifecycle_phase: ``pre`` or ``post`` for template conditionals.
+        workflow_name: YAML workflow key for Jinja conditionals (e.g. feature-specific post-run text).
 
     Returns:
         The rendered lifecycle section as a markdown string.
@@ -246,6 +252,7 @@ async def build_lifecycle_section(
         previous_error=previous_error,
         include_images=embed_images,
         lifecycle_phase=lifecycle_phase,
+        workflow_name=workflow_name,
     )
 
     # Render the lifecycle template
@@ -277,6 +284,7 @@ async def assemble_prompt(
     comments: list[dict[str, Any]] | None = None,
     previous_error: str | None = None,
     workspace_path: Path | None = None,
+    workflow_name: str = "",
 ) -> str:
     """Orchestrate three-layer prompt assembly.
 
@@ -304,6 +312,8 @@ async def assemble_prompt(
         last_run_at: ISO timestamp of the last run.
         comments: All comments on the issue (for filtering).
         previous_error: Error from previous attempt for retry feedback.
+        workspace_path: Optional workspace root for embedded images in lifecycle.
+        workflow_name: YAML workflow key passed into lifecycle Jinja (default empty).
 
     Returns:
         The fully assembled prompt string.
@@ -389,6 +399,7 @@ async def assemble_prompt(
         previous_error=previous_error,
         workspace_path=workspace_path,
         lifecycle_phase="pre",
+        workflow_name=workflow_name,
     )
     parts.append(lifecycle)
 
@@ -408,6 +419,7 @@ async def assemble_post_run_lifecycle_prompt(
     comments: list[dict[str, Any]] | None = None,
     previous_error: str | None = None,
     workspace_path: Path | None = None,
+    workflow_name: str = "",
 ) -> str:
     """Build the follow-up post-run user prompt (lifecycle closure layer only).
 
@@ -417,6 +429,9 @@ async def assemble_post_run_lifecycle_prompt(
 
     Resolves the markdown path via ``prompts.resolved_lifecycle_post_run_prompt()`` —
     default relative path ``prompts/lifecycle-post-run.md`` next to ``workflow.yaml``.
+    Renders it with the same lifecycle Jinja context as the pre-run layer (issue,
+    ``state_name``, transitions, comments slice, ``lifecycle_phase='post'``, etc.), plus
+    ``workflow_name`` (YAML workflow key, e.g. ``feature``) for template conditionals.
     """
     prompts = workflow_prompts if workflow_prompts is not None else cfg.prompts
     post_path = prompts.resolved_lifecycle_post_run_prompt()
@@ -441,6 +456,7 @@ async def assemble_post_run_lifecycle_prompt(
         embed_images=False,
         workspace_path=workspace_path,
         lifecycle_phase="post",
+        workflow_name=workflow_name,
     )
 
 
