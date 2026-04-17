@@ -1,0 +1,4 @@
+change:
+  name: common-prompts-for-workflows
+  description: Add common_prompts section to workflow.yaml for shared prompt defaults across workflows
+  status: proposed
