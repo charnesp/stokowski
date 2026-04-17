@@ -88,3 +88,14 @@ Per-workflow validation SHALL run the new `agent-gate` rules alongside existing 
 
 - **WHEN** a workflow contains only valid `agent`, `gate`, `terminal`, and `agent-gate` states with consistent transitions
 - **THEN** validation SHALL succeed
+
+### Requirement: post_run defaults for agent and agent-gate
+
+Runner states **`agent`** and **`agent-gate`** SHALL support an optional boolean field **`post_run`**. When the field is **absent** from YAML, the effective value SHALL be **true** (orchestrator may run a post-run lifecycle-only follow-up turn after a successful work turn). When **`post_run: false`** is set explicitly, the orchestrator SHALL use a **single** runner turn for that state.
+
+#### Scenario: agent-gate without post_run key validates
+
+- **WHEN** a state has `type: agent-gate` and valid `transitions`, `default_transition`, and `prompt`
+- **AND** the YAML omits the `post_run` key
+- **THEN** `validate_config` SHALL NOT fail solely because `post_run` is missing
+- **AND** the effective post-run flag for that state SHALL be **true**

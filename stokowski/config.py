@@ -177,7 +177,8 @@ class StateConfig:
     default_transition: str | None = None  # agent-gate only: fallback key in transitions
     transitions: dict[str, str] = field(default_factory=lambda: {})
     hooks: HooksConfig | None = None
-    # When None on type agent: treated as True. On agent-gate: must be set explicitly in YAML.
+    # When None on type agent or agent-gate: effective_post_run defaults to True (two-turn
+    # closure). Set post_run: false explicitly for single-turn routing gates.
     post_run: bool | None = None
 
 
@@ -386,13 +387,14 @@ def _is_agent_like(sc: StateConfig) -> bool:
 def effective_post_run(state: StateConfig) -> bool:
     """Whether the orchestrator should run a post-run follow-up after the work turn.
 
-    ``agent`` states default to True when ``post_run`` is omitted. ``agent-gate`` must
-    declare ``post_run`` in YAML (enforced by ``validate_config``); if omitted, treat
-    as False until validation runs.
+    For both ``agent`` and ``agent-gate``, when ``post_run`` is omitted (``None``),
+    the effective value is **True** (second closure turn). Use ``post_run: false`` in
+    YAML for single-turn states (typical machine-routing gates that emit routing in the
+    same turn as the stage prompt).
     """
     if state.post_run is not None:
         return bool(state.post_run)
-    return state.type == "agent"
+    return state.type in ("agent", "agent-gate")
 
 
 def _resolve_linear_state_name(key: str, ls: LinearStatesConfig) -> str:
@@ -693,11 +695,6 @@ def _validate_agent_gate_rules(
                 f"{msg_prefix} (agent-gate) default_transition must target a state with "
                 f"type 'gate', not '{target_cfg.type}' (target '{target_name}')"
             )
-    if sc.post_run is None:
-        errors.append(
-            f"{msg_prefix} (agent-gate) must declare 'post_run' (true or false); "
-            "typical routing gates use post_run: false"
-        )
 
 
 def validate_config(cfg: ServiceConfig, skip_secrets_check: bool = False) -> list[str]:

@@ -23,8 +23,9 @@
 #
 # State types:
 #   agent       — Stokowski dispatches Claude Code in this state
-#   agent-gate  — one agent turn, then machine routing from <<<STOKOWSKI_ROUTE>>> JSON
-#                 (requires default_transition → a gate, plus named transitions; see below)
+#   agent-gate  — machine routing from <<<STOKOWSKI_ROUTE>>> JSON (requires default_transition →
+#                 a gate, plus named transitions; see README). post_run omitted ⇒ two turns
+#                 (closure in post-run); post_run: false ⇒ single turn (routing in stage prompt)
 #   gate        — pauses for human review; approve → next, rework → rework_to
 #   terminal    — issue is finished; workspace cleaned up
 #
@@ -284,7 +285,6 @@ workflows:
       # clean → human merge gate. On invalid routing output, default sends to merge-review.
       review-findings-route:
         type: agent-gate
-        post_run: false
         prompt: prompts/feature/review-findings-route.md
         linear_state: active
         default_transition: needs_human

@@ -167,7 +167,7 @@ Linear issue → isolated git clone → agent (Claude or Codex) → PR + Human R
 - **Multi-workflow** — route issues to different state machines using Linear labels (`workflows:` in YAML); optional `default: true` fallback; backward-compatible single pipeline without `workflows:`
 - **Agent-gate** — after one agent turn, choose the next state automatically from structured output (`<<<STOKOWSKI_ROUTE>>>` JSON); safe fallback to a human gate and `route-error` comment on parse failure
 - **Multi-runner** — Claude Code and Codex in the same pipeline; different states can use different runners and models (e.g. Opus for investigation, Sonnet for implementation, Codex for review)
-- **Three-layer prompt assembly** — global prompt + per-stage prompt + auto-injected **pre-run** lifecycle context; for `agent` states (and `agent-gate` when `post_run: true`), a **second** runner turn may follow with only the **post-run** lifecycle template (structured report / `git` contract), so the model sees pre → work → post instead of one overloaded prompt
+- **Three-layer prompt assembly** — global prompt + per-stage prompt + auto-injected **pre-run** lifecycle context; for `agent` and `agent-gate` states when **`post_run`** is effectively **true** (default when omitted), a **second** runner turn may follow with only the **post-run** lifecycle template (structured report / `git` contract), so the model sees pre → work → post instead of one overloaded prompt
 - **Linear-driven dispatch** — polls for issues in configured states, dispatches agents with bounded concurrency
 - **Session continuity** — multi-turn agent sessions via `--resume` (Claude Code); agents pick up where they left off
 - **Isolated workspaces** — per-issue git clones so parallel agents never conflict
@@ -524,7 +524,7 @@ When your team uses **different pipelines** for different kinds of work (bugs vs
 
 **Per-workflow settings**
 
-Each workflow typically defines its own `states`, `prompts` (`global_prompt`, `lifecycle_prompt`, optional `lifecycle_post_run_prompt`), and may override **`max_concurrent_agents`** and **`max_concurrent_agents_by_state`**. Runner states (`agent` / `agent-gate`) may set **`post_run: true|false`** (`agent` defaults to **true** when omitted; every **`agent-gate`** must set it explicitly — typical routing gates use **`post_run: false`** so report and routing stay in the stage prompt). Linear state mapping (`linear_states`), `tracker`, `workspace`, root `hooks`, and root `claude` defaults are usually **shared** at the top level of the file.
+Each workflow typically defines its own `states`, `prompts` (`global_prompt`, `lifecycle_prompt`, optional `lifecycle_post_run_prompt`), and may override **`max_concurrent_agents`** and **`max_concurrent_agents_by_state`**. Runner states (`agent` / `agent-gate`) may set **`post_run: true|false`**. When **`post_run`** is **omitted**, both types default to **true** (a **post-run** lifecycle-only second turn runs after a successful work turn). Typical machine-routing **`agent-gate`** states set **`post_run: false`** explicitly so report + `<<<STOKOWSKI_ROUTE>>>` stay in the **single** work turn (stage prompt). Linear state mapping (`linear_states`), `tracker`, `workspace`, root `hooks`, and root `claude` defaults are usually **shared** at the top level of the file.
 
 **Backward compatibility**
 
@@ -554,7 +554,7 @@ workflows:
 
 ## Agent-gate states (machine routing)
 
-An **`agent-gate`** state is like an **`agent`** state (same runner and prompt assembly for the **work** turn), but when the run **succeeds**, Stokowski **does not** follow a fixed `complete` transition. Instead it reads a **routing decision** from the model output and calls the matching transition key. **`post_run` is required in YAML:** use **`post_run: false`** for the usual single-turn gate (report + routing live in the stage `prompt`); use **`post_run: true`** only if you want the same two-turn closure sequence as `agent` states (canonical report parsed from the **post** turn).
+An **`agent-gate`** state is like an **`agent`** state (same runner and prompt assembly for the **work** turn), but when the run **succeeds**, Stokowski **does not** follow a fixed `complete` transition. Instead it reads a **routing decision** from the model output and calls the matching transition key. **`post_run`** follows the same rules as **`agent`**: **omitted ⇒ true** (two-turn sequence; canonical report and routing are parsed from the **post-run** turn when you use the default). Set **`post_run: false`** explicitly for the usual **single-turn** routing gate (report + routing live in the stage `prompt` for that one turn).
 
 **When to use it**
 
@@ -568,7 +568,7 @@ An **`agent-gate`** state is like an **`agent`** state (same runner and prompt a
 | `type: agent-gate` | Enables routing behaviour |
 | `transitions` | Map of **logical keys** → **target state names** (must exist in the same workflow) |
 | `default_transition` | One of those keys; its **target state must be `type: gate`** — used when the block is missing, JSON is invalid, or the key is unknown |
-| `post_run` | **Required** boolean. **`false`** — one runner turn; parse report and routing from that output. **`true`** — after a successful work turn, run a **post-run** lifecycle-only follow-up; parse the canonical report (and routing, if applicable) from that second output |
+| `post_run` | Optional boolean. **Omitted** — same as **`true`** for both `agent` and `agent-gate` (second **post-run** turn). **`false`** — one runner turn; parse report and routing from that output only. **`true`** — explicit two-turn closure (post-run lifecycle follow-up) |
 
 Forbidden on `agent-gate` (same as gates): `rework_to`, `max_rework` — human rework is expressed via the gate you route into.
 
@@ -764,7 +764,7 @@ states:                                # the state machine pipeline
 | Type | Has prompt | What Stokowski does |
 |------|-----------|---------------------|
 | `agent` (default) | Yes | Dispatches a runner; on success follows `transitions.complete`. When **`post_run`** is true (default if omitted), may run a **second** turn with only the post-run lifecycle template before transitioning |
-| `agent-gate` | Yes | Like `agent` for the work turn; on success parses `<<<STOKOWSKI_ROUTE>>>` … JSON and follows the matching `transitions` key, or `default_transition` on failure. **`post_run`** is required: **`false`** = single turn (typical); **`true`** = two-turn closure like `agent` (see [Agent-gate states](#agent-gate-states-machine-routing)) |
+| `agent-gate` | Yes | Like `agent` for the work turn; on success parses `<<<STOKOWSKI_ROUTE>>>` … JSON and follows the matching `transitions` key, or `default_transition` on failure. **`post_run`** optional (omitted = **true**, same as `agent`); set **`post_run: false`** for a typical single-turn routing gate (see [Agent-gate states](#agent-gate-states-machine-routing)) |
 | `gate` | No | Moves issue to review Linear state, waits for human. Follows `transitions.approve` on Gate Approved, `rework_to` on Rework |
 | `terminal` | No | Moves issue to terminal Linear state, deletes workspace |
 

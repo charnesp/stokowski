@@ -83,7 +83,7 @@ class TestAgentGateValidationLegacy:
         errors = validate_config(cfg, skip_secrets_check=True)
         assert errors == [], f"unexpected errors: {errors}"
 
-    def test_agent_gate_missing_post_run_rejected(self, tmp_path):
+    def test_agent_gate_omitted_post_run_validates_and_defaults_true(self, tmp_path):
         yaml = (
             TRACKER
             + """
@@ -96,7 +96,7 @@ states:
   route:
     type: agent-gate
     prompt: prompts/route.md
-    default_transition: human
+    default_transition: x
     transitions:
       x: human
   human:
@@ -111,7 +111,10 @@ states:
         )
         cfg = _parse(tmp_path, yaml)
         errors = validate_config(cfg, skip_secrets_check=True)
-        assert any("post_run" in e.lower() for e in errors), errors
+        assert errors == [], f"unexpected errors: {errors}"
+        route = cfg.states["route"]
+        assert route.post_run is None
+        assert effective_post_run(route) is True
 
     def test_missing_default_transition_rejected(self, tmp_path):
         yaml = (
