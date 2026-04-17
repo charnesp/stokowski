@@ -138,3 +138,4 @@ Ensure:
 - [x] Workflow-specific prompts override `common_prompts` values
 - [x] Existing configs without `common_prompts` continue to work
 - [x] All tests pass
+- [x] Implementation committed and pushed to origin
