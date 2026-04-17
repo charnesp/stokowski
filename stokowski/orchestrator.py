@@ -1398,6 +1398,7 @@ class Orchestrator:
                 comments=comments,
                 previous_error=previous_error,
                 workspace_path=workspace_path,
+                workflow_name=workflow.name,
             )
 
         # Legacy fallback
@@ -1470,6 +1471,7 @@ class Orchestrator:
             comments=comments,
             previous_error=previous_error,
             workspace_path=workspace_path,
+            workflow_name=workflow.name,
         )
 
     async def _render_prompt(
@@ -1516,6 +1518,7 @@ class Orchestrator:
                 last_run_at=last_run_at,
                 comments=None,
                 workspace_path=None,
+                workflow_name=workflow.name,
             )
 
         # Legacy mode: use workflow prompt_template with Jinja2

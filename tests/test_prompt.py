@@ -214,6 +214,64 @@ class TestBuildLifecycleSection:
         assert pre["lifecycle_phase"] == "pre"
         assert post["lifecycle_phase"] == "post"
 
+    def test_build_lifecycle_context_includes_workflow_name(self):
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+        sc = StateConfig(name="investigate", type="agent")
+        ctx = build_lifecycle_context(
+            issue=issue,
+            state_name="investigate",
+            state_cfg=sc,
+            linear_states=LinearStatesConfig(),
+            workflow_name="feature",
+        )
+        assert ctx["workflow_name"] == "feature"
+
+    @pytest.mark.asyncio
+    async def test_post_run_feature_investigate_includes_openspec_verbatim_reminder(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        post_template = (repo_root / ".stokowski" / "prompts" / "lifecycle-post-run.md").read_text()
+        issue = Issue(
+            id="test-123",
+            identifier="PROJ-1",
+            title="Test issue",
+            state="In Progress",
+        )
+        state_cfg = StateConfig(
+            name="investigate",
+            type="agent",
+            post_run=True,
+            prompt="prompts/investigate.md",
+            transitions={"complete": "next"},
+        )
+        result = await build_lifecycle_section(
+            lifecycle_template=post_template,
+            issue=issue,
+            state_name="investigate",
+            state_cfg=state_cfg,
+            linear_states=LinearStatesConfig(),
+            lifecycle_phase="post",
+            workflow_name="feature",
+        )
+        assert "openspec/changes" in result
+        assert "#### proposal.md" in result
+        assert "#### design.md" in result
+
+        other_wf = await build_lifecycle_section(
+            lifecycle_template=post_template,
+            issue=issue,
+            state_name="investigate",
+            state_cfg=state_cfg,
+            linear_states=LinearStatesConfig(),
+            lifecycle_phase="post",
+            workflow_name="fix",
+        )
+        assert "#### proposal.md" not in other_wf
+
     @pytest.mark.asyncio
     async def test_assemble_post_run_omits_global_prompt(self, tmp_path: Path):
         """Post-run assembly is lifecycle-only (no global/stage layers)."""
