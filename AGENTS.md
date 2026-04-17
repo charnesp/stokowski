@@ -139,7 +139,7 @@ find . -type d -name __pycache__ -exec rm -rf {} +
 Workflows are defined in `workflow.yaml` (not in this repo — operator creates it):
 
 - **agent states**: Run the configured runner (`claude`, `codex`, or `mux`) with the stage prompt; on success follow `transitions.complete`
-- **agent-gate states**: Same runner stack as `agent` for **one** turn; on success parse `<<<STOKOWSKI_ROUTE>>>` … `<<<END_STOKOWSKI_ROUTE>>>` for `{"transition":"<key>"}` and follow `transitions[key]`. Requires `default_transition` pointing to a key whose **target** is `type: gate`. On parse failure, post `route-error` and use `default_transition`. Implementation: `agent_gate_route.py` — routing text is taken from **decoded** `assistant` / `result` fields in stream-json, not from raw NDJSON substrings.
+- **agent-gate states**: Same runner stack as `agent` for the **work** turn (and optionally a **post-run** lifecycle-only second turn when `post_run` is true or omitted — default **true**, same as `agent`). On success parse `<<<STOKOWSKI_ROUTE>>>` … `<<<END_STOKOWSKI_ROUTE>>>` for `{"transition":"<key>"}` from the **canonical** runner output (post-run turn if two-turn, otherwise the single turn) and follow `transitions[key]`. Requires `default_transition` pointing to a key whose **target** is `type: gate`. On parse failure, post `route-error` and use `default_transition`. Set **`post_run: false`** in YAML for a **single-turn** routing gate. Implementation: `agent_gate_route.py` — routing text is taken from **decoded** `assistant` / `result` fields in stream-json, not from raw NDJSON substrings.
 - **gate states**: Pause for human review via Linear state changes (`approve` / `rework_to`)
 - **terminal states**: Issue complete, workspace cleaned up
 
