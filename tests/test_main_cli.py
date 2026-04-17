@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from stokowski.main import build_arg_parser
+from stokowski.main import build_arg_parser, normalize_cli_args
 from stokowski.orchestrator import Orchestrator
 
 MINIMAL_WORKFLOW = """
@@ -34,11 +34,51 @@ workflows:
 
 
 def test_cli_path_after_log_agent_output_is_log_dir_not_workflow():
-    """Regression: `stokowski -v --log-agent-output foo.yaml` binds foo.yaml to the flag, not workflow."""
+    """Regression: argparse binds the next token to --log-agent-output, not workflow."""
     p = build_arg_parser()
     args = p.parse_args(["-v", "--log-agent-output", ".stokowski/workflow.yaml"])
     assert args.workflow is None
     assert args.log_agent_output == ".stokowski/workflow.yaml"
+
+
+def test_normalize_reinterprets_log_path_as_workflow_when_tracker_present(tmp_path: Path):
+    wf = tmp_path / "nested" / "workflow.yaml"
+    wf.parent.mkdir()
+    wf.write_text(MINIMAL_WORKFLOW)
+    p = build_arg_parser()
+    args = p.parse_args(["-v", "--log-agent-output", str(wf), "."])
+    normalize_cli_args(args)
+    assert args.workflow == str(wf.resolve())
+    assert args.log_agent_output == ""
+
+
+def test_normalize_does_not_swap_plain_yaml(tmp_path: Path):
+    f = tmp_path / "config.yaml"
+    f.write_text("foo: 1\n")
+    p = build_arg_parser()
+    args = p.parse_args(["-v", "--log-agent-output", str(f)])
+    normalize_cli_args(args)
+    assert args.workflow is None
+    assert args.log_agent_output == str(f)
+
+
+def test_normalize_does_not_swap_when_workflow_explicit(tmp_path: Path):
+    wf1 = tmp_path / "a.yaml"
+    wf2 = tmp_path / "b.yaml"
+    wf1.write_text(MINIMAL_WORKFLOW)
+    wf2.write_text("foo: 1\n")
+    p = build_arg_parser()
+    args = p.parse_args([str(wf1), "--log-agent-output", str(wf2)])
+    normalize_cli_args(args)
+    assert args.workflow == str(wf1)
+    assert args.log_agent_output == str(wf2)
+
+
+def test_normalize_dot_workflow_means_unset_then_default_resolution(tmp_path: Path):
+    p = build_arg_parser()
+    args = p.parse_args(["-v", "."])
+    normalize_cli_args(args)
+    assert args.workflow is None
 
 
 def test_cli_workflow_before_log_flag():

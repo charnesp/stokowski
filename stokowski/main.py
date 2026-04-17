@@ -336,9 +336,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "  %(prog)s .stokowski/workflow.yaml -v --log-agent-output\n"
             "  %(prog)s -v --log-agent-output -- .stokowski/workflow.yaml\n"
             "\n"
-            "When using a path after --log-agent-output, it is the log directory, not the "
-            "workflow file. Put the workflow path first, use '=' (e.g. --log-agent-output=DIR), "
-            "or end options with -- before the workflow path (see second example).\n"
+            "When using a path after --log-agent-output, argparse treats it as the log directory, "
+            "not the workflow file. Put the workflow path first, use '=' (e.g. "
+            "--log-agent-output=DIR), or end options with -- before the workflow path.\n"
+            "If you pass a workflow YAML there by mistake (top-level 'tracker') and did not "
+            "give an explicit workflow path, Stokowski will reinterpret it as the workflow file.\n"
         ),
     )
     parser.add_argument(
@@ -380,9 +382,51 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def normalize_cli_args(args: argparse.Namespace) -> None:
+    """Adjust common CLI mistakes before resolving defaults.
+
+    - ``workflow`` of ``.`` (cwd) is treated as unspecified so normal auto-detection applies.
+    - A ``*.yaml`` / ``*.yml`` **file** right after ``--log-agent-output`` is often the workflow
+      path, not the log directory; if it looks like a Stokowski workflow (top-level ``tracker``)
+      and no workflow was given explicitly, use it as ``workflow`` and enable default log dir.
+    """
+    if args.workflow in (".", "./."):
+        args.workflow = None
+
+    log_val = args.log_agent_output
+    if log_val in (None, "") or args.workflow is not None:
+        return
+
+    cand = Path(str(log_val)).expanduser()
+    if not cand.is_file() or cand.suffix.lower() not in (".yaml", ".yml"):
+        return
+
+    try:
+        import yaml
+
+        raw = yaml.safe_load(cand.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return
+
+    if not isinstance(raw, dict) or "tracker" not in raw:
+        return
+
+    console.print(
+        "[yellow]Interpreting the path after --log-agent-output as the workflow file "
+        f"(not the log directory): {cand}\n"
+        "Tip: put the workflow path first, e.g. "
+        f"[dim]stokowski {cand} -v --log-agent-output[/dim], "
+        "or set the log directory with [dim]--log-agent-output=DIR[/dim].[/yellow]"
+    )
+    args.workflow = str(cand.resolve())
+    args.log_agent_output = ""
+
+
 def cli():
     parser = build_arg_parser()
     args = parser.parse_args()
+
+    normalize_cli_args(args)
 
     if args.workflow is None:
         if Path("workflow.yaml").exists():
